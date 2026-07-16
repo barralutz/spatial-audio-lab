@@ -26,6 +26,9 @@ public partial class MainWindow : Window {
     bool updatingControls;
     SpeakerDefinition? draggedSpeaker;
     Canvas? dragCanvas;
+    Point dragStartPoint;
+    Vector dragPointerOffset;
+    bool dragActivated;
 
     public MainWindow() {
         InitializeComponent();
@@ -306,6 +309,13 @@ public partial class MainWindow : Window {
         if (sender is not Border marker || marker.Tag is not SpeakerDefinition speaker) return;
         draggedSpeaker = speaker;
         dragCanvas = FindParentCanvas(marker);
+        if (dragCanvas is null) return;
+        dragStartPoint = e.GetPosition(dragCanvas);
+        Point markerCenter = new(
+            Canvas.GetLeft(marker) + marker.Width / 2,
+            Canvas.GetTop(marker) + marker.Height / 2);
+        dragPointerOffset = dragStartPoint - markerCenter;
+        dragActivated = false;
         dragCanvas?.CaptureMouse();
         SpeakerList.SelectedItem = speaker;
         e.Handled = true;
@@ -314,7 +324,15 @@ public partial class MainWindow : Window {
     void CanvasMouseMove(object sender, MouseEventArgs e) {
         if (e.LeftButton != MouseButtonState.Pressed || draggedSpeaker is null ||
             dragCanvas is null || !ReferenceEquals(sender, dragCanvas)) return;
-        Point point = e.GetPosition(dragCanvas);
+        Point pointer = e.GetPosition(dragCanvas);
+        if (!dragActivated) {
+            if (Math.Abs(pointer.X - dragStartPoint.X) < SystemParameters.MinimumHorizontalDragDistance &&
+                Math.Abs(pointer.Y - dragStartPoint.Y) < SystemParameters.MinimumVerticalDragDistance) {
+                return;
+            }
+            dragActivated = true;
+        }
+        Point point = pointer - dragPointerOffset;
         if (ReferenceEquals(dragCanvas, TopCanvas)) {
             double dx = point.X - TopCanvas.ActualWidth / 2;
             double dy = point.Y - TopCanvas.ActualHeight / 2;
@@ -338,6 +356,7 @@ public partial class MainWindow : Window {
         dragCanvas.ReleaseMouseCapture();
         draggedSpeaker = null;
         dragCanvas = null;
+        dragActivated = false;
         e.Handled = true;
     }
 

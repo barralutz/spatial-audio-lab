@@ -39,8 +39,8 @@ Diagnostico realizado entre el 15 y el 16 de julio de 2026:
 - Antes del override, el endpoint AMD rechaza PCM 7.1 y MAT 1.0/2.0/2.1 en modo exclusivo.
 
 Esto confirma que Realtek ofrece diez salidas analogicas potenciales, 8 + 2. El DAC USB C-1U agrega
-otras dos. La configuracion actual usa Realtek trasero para la cama 7.1, el panel frontal para
-`TFL/TFR` y C-1U para `TBL/TBR`.
+otras dos. La configuracion actual usa Realtek trasero para la cama 7.1, C-1U para `TFL/TFR` y el
+panel frontal para `TBL/TBR`.
 
 ## Salida configurable 7.1.4
 
@@ -357,7 +357,7 @@ Capturas de referencia:
 - `src/mat_pipeline.cpp`: decodificador MAT 7.1.2 compatible y ruta configurable en vivo.
 - `src/speaker_layout.*`: parser/validador de perfiles y paneo segun posiciones fisicas.
 - `src/multi_endpoint_renderer.*`: WASAPI multidispositivo, colas, relojes y resampling adaptativo.
-- `configs/realtek-c1u-714.ini`: cama Realtek 7.1, techo frontal Realtek y techo trasero C-1U.
+- `configs/realtek-c1u-714.ini`: cama Realtek 7.1, techo frontal C-1U y techo trasero Realtek.
 - `tools/SpeakerLayoutEditor`: editor grafico WPF del perfil de parlantes y salidas.
 - `tools/Start-Live714.ps1` / `tools/Stop-Live714.ps1`: administran el puente MAT 7.1.4.
 - `build/dolby-probe.exe`: binario Windows ya compilado en esta maquina.

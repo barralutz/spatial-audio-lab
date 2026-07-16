@@ -118,7 +118,8 @@ internal sealed class LayoutDocument {
             text.AppendLine($"speakers={string.Join(',', output.Speakers)}");
             text.AppendLine($"delay_ms={Number(output.DelayMilliseconds)}");
         }
-        File.WriteAllText(path, text.ToString(), new UTF8Encoding(false));
+        File.WriteAllText(path, text.ToString().Replace("\r\n", "\n"),
+            new UTF8Encoding(false));
     }
 
     public OutputRouteDefinition? OutputFor(string speakerName) =>
