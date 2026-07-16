@@ -1,8 +1,9 @@
 # dolbyDecoder: experimento EDID/MAT
 
 Este repositorio investiga la captura y el renderizado de Dolby Atmos para obtener una salida
-analogica 7.1.2. La fase EDID/WASAPI ya determino donde no es posible interceptar el carrier; el
-prototipo actual usa un endpoint virtual SysVAD para recibir Dolby MAT 2.1 antes de HDMI.
+analogica configurable. La ruta de juegos ya reproduce Dolby MAT como 7.1.4 mediante tres
+dispositivos WASAPI; la ruta de peliculas E-AC-3 JOC y TrueHD Atmos conserva por ahora la salida
+7.1.2. El endpoint virtual SysVAD recibe Dolby MAT 2.1 antes de HDMI.
 
 ## Conclusion tecnica
 
@@ -37,10 +38,54 @@ Diagnostico realizado entre el 15 y el 16 de julio de 2026:
 - Dolby Access esta instalado y Atmos Home Theater esta activo en el endpoint HDMI Hisense.
 - Antes del override, el endpoint AMD rechaza PCM 7.1 y MAT 1.0/2.0/2.1 en modo exclusivo.
 
-Esto confirma que existen diez salidas analogicas potenciales, 8 + 2. La reproduccion simultanea ya
-midio ambos endpoints durante 29.702 segundos: sus relojes reportaron exactamente el mismo avance y
-una diferencia de 0.000 ms. En este codec comparten reloj fisico y no hace falta resampling adaptativo
-en la ruta inicial; el programa conserva la medicion para detectar una eventual divergencia.
+Esto confirma que Realtek ofrece diez salidas analogicas potenciales, 8 + 2. El DAC USB C-1U agrega
+otras dos. La configuracion actual usa Realtek trasero para la cama 7.1, el panel frontal para
+`TFL/TFR` y C-1U para `TBL/TBR`.
+
+## Salida configurable 7.1.4
+
+`live-layout` reemplaza las rutas de salida fijas por el perfil
+`configs/realtek-c1u-714.ini`. El perfil define azimut, elevacion y nivel de cada parlante, los
+parlantes asignados a cada endpoint, retardo inicial y cual dispositivo actua como maestro. El
+renderer abre todos los endpoints como PCM float a 48 kHz y mantiene una unica cola de programa.
+
+Cada salida secundaria tiene su propio resampler fraccional. `IAudioClock` estima tanto la
+frecuencia acumulada del DAC como su fase respecto del maestro; un servo lento corrige deriva sin
+saltos y limita la variacion a 2000 ppm. Esta arquitectura no depende de C-1U: un DAC USB futuro o
+una tarjeta PCIe adicional solo requiere otra seccion `[output.*]` en el perfil.
+
+La prueba silenciosa de 120 segundos abrio los tres dispositivos sin starvation. El panel frontal
+midio una diferencia fija maxima de 10 ms y el C-1U termino alineado con el maestro; ambos
+convergieron mediante resampling adaptativo. Una captura MAT estatica 7.1.4 recupero los doce
+canales, incluidos `TBL/TBR` a aproximadamente -25.05 dBFS RMS, con cero rafagas malformadas,
+cero gaps, cero bytes descartados y cero clipping. Otra prueba con un objeto dinamico arriba y
+detras tambien produjo senal en ambos canales superiores traseros. La salida 7.1.2 historica
+conserva exactamente el SHA-256 de referencia.
+
+El editor WPF permite arrastrar cada parlante en vistas de planta y elevacion, modificar azimut,
+elevacion, nivel y ruta, editar endpoints/retardos y probar un parlante aislado. Guarda directamente
+el mismo INI consumido por el motor.
+
+```powershell
+.\tools\Build-DolbyProbe.ps1
+.\tools\Build-SpeakerLayoutEditor.ps1
+.\tools\Start-SpeakerLayoutEditor.ps1
+
+.\build\dolby-probe.exe test-layout 120 `
+  .\configs\realtek-c1u-714.ini 0
+.\build\dolby-probe.exe test-speaker 3 `
+  .\configs\realtek-c1u-714.ini TBR 0.08
+.\build\dolby-probe.exe spatial-test 3 `
+  'SinkDescription Sample' 714
+
+# Requiere el arranque F7 y el driver SysVAD de prueba.
+.\tools\Start-Live714.ps1 -DurationSeconds 3600 -Gain 0.25
+.\tools\Stop-Live714.ps1
+```
+
+`live-layout` es actualmente la ruta configurable para MAT de juegos. `DolbyPlayer` todavia
+renderiza peliculas a la pareja Realtek 8+2; compartir el mismo renderer 7.1.4 es la siguiente
+integracion, no una capacidad que deba asumirse ya terminada.
 
 ## Salida GPU dedicada
 
@@ -309,15 +354,19 @@ Capturas de referencia:
 - `src/mat_capture_client.*`: cliente IOCTL del ring `\\.\DolbyDecoderMat`.
 - `src/mat_format.*`: operaciones comunes sobre transporte y metadata MAT.
 - `src/mat_analysis.cpp`: diagnosticos del carrier, posiciones de objetos y PCM multicanal.
-- `src/mat_pipeline.cpp`: decodificador MAT 7.1.2 y render analogico grabado/en vivo.
+- `src/mat_pipeline.cpp`: decodificador MAT 7.1.2 compatible y ruta configurable en vivo.
+- `src/speaker_layout.*`: parser/validador de perfiles y paneo segun posiciones fisicas.
+- `src/multi_endpoint_renderer.*`: WASAPI multidispositivo, colas, relojes y resampling adaptativo.
+- `configs/realtek-c1u-714.ini`: cama Realtek 7.1, techo frontal Realtek y techo trasero C-1U.
+- `tools/SpeakerLayoutEditor`: editor grafico WPF del perfil de parlantes y salidas.
+- `tools/Start-Live714.ps1` / `tools/Stop-Live714.ps1`: administran el puente MAT 7.1.4.
 - `build/dolby-probe.exe`: binario Windows ya compilado en esta maquina.
 
 La separacion modular conserva la salida del decoder byte por byte. El fixture estatico
 `mat21-spatial-712-distinct-tones.wav` sigue produciendo SHA-256
 `c0a2d9fa83ebbd9a99686a724b625a0a96eed5c3392c9b2b7632e5b2def68691`; la salida de `list`
-tambien coincide exactamente con el binario monolitico anterior. El ejecutable modular validado
-tiene SHA-256 `9f708b2571eaf2cf224e079db60773d4f205a5ed0fbd96e9892c428d72da13ff`; el anterior se conserva
-como `build/dolby-probe-monolith.exe`.
+tambien coincide exactamente con el binario monolitico anterior. El anterior se conserva como
+`build/dolby-probe-monolith.exe`.
 
 El EDID generado contiene:
 
@@ -374,6 +423,11 @@ cd C:\Users\barra\Documents\Desarrollo\dolbyDecoder
   'Altavoces (Realtek(R) Audio)' '2nd output' 0.25 80
 .\tools\Start-Live712.ps1 -DurationSeconds 3600 -Gain 0.25
 .\tools\Stop-Live712.ps1
+.\build\dolby-probe.exe analyze-mat-layout `
+  '.\captures\mat21-spatial-dynamic-fixed-above.wav' `
+  '.\configs\realtek-c1u-714.ini'
+.\tools\Start-Live714.ps1 -DurationSeconds 3600 -Gain 0.25
+.\tools\Stop-Live714.ps1
 .\build\dolby-probe.exe capture-process 25 (Get-Process bf1).Id `
   '.\captures\battlefield-1-native-atmos-process.wav'
 ```
@@ -408,6 +462,13 @@ capacidad que el S34J55x fisico no posee. Para restaurar, importar el backup con
 
 ## Compilacion
 
+En esta maquina, el camino reproducible no depende de que CMake este en `PATH`:
+
+```powershell
+.\tools\Build-DolbyProbe.ps1
+.\tools\Build-SpeakerLayoutEditor.ps1
+```
+
 Con Visual Studio 2022, CMake y Windows SDK:
 
 ```powershell
@@ -421,12 +482,11 @@ float/48 kHz del endpoint Realtek, con frames no silenciosos y cabecera WAV vali
 ## Ruta posterior
 
 El ring, el parser incremental y la salida analogica directa ya estan validados sin perdida. Las
-siguientes iteraciones se concentran en robustez y fidelidad:
+siguientes iteraciones se concentran en fidelidad e integracion:
 
-1. Desactivar por defecto el volcado `CSaveData` ahora que el ring es la ruta primaria, para evitar
-   crecimiento de archivos durante sesiones largas.
+1. Reutilizar el renderer configurable en `DolbyPlayer` para peliculas 7.1.4.
 2. Agregar una espera/notificacion cancelable al IOCTL despues de validar el sondeo inicial.
-3. Ejecutar pruebas prolongadas y medir latencia, uso de CPU, cola maxima y recuperacion ante gaps.
+3. Medir latencia y recuperacion ante desconexion/reconexion fisica de DACs secundarios.
 4. Comparar el paneo y el LFE contra un decoder de referencia; despues sustituir la repeticion LFE
    por un resampler con filtro.
 

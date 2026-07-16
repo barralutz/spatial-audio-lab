@@ -3,6 +3,8 @@
 #include "audio_platform.h"
 #include "mat_capture_client.h"
 #include "mat_format.h"
+#include "multi_endpoint_renderer.h"
+#include "speaker_layout.h"
 #include "wave_io.h"
 
 #include <algorithm>
@@ -27,6 +29,9 @@ namespace dolby {
 struct MatStaticChannel {
     std::size_t fullBandSlot;
     std::size_t outputChannel;
+    std::wstring_view speakerName;
+    double azimuthDegrees;
+    double height;
 };
 
 constexpr std::size_t kMatOutputFramesPerHalf = 480;
@@ -34,16 +39,19 @@ constexpr std::size_t kMatOutputChannels = 10;
 constexpr std::size_t kMatFullBandSlotsPerHalf = 31;
 constexpr std::array<BYTE, 6> kMatFullBandMarker = {0x83, 0x41, 0x43, 0xc2, 0x08, 0x2f};
 constexpr std::array<BYTE, 6> kMatLfeMarker = {0x83, 0x41, 0x40, 0xf2, 0x0b, 0x2f};
-constexpr std::array<MatStaticChannel, 9> kMatStaticChannels = {{
-    {0, 0}, // FL
-    {1, 1}, // FR
-    {2, 2}, // FC
-    {3, 6}, // SL
-    {4, 7}, // SR
-    {5, 4}, // BL
-    {6, 5}, // BR
-    {7, 8}, // TFL
-    {8, 9}, // TFR
+constexpr std::size_t kMatLegacyStaticChannelCount = 9;
+constexpr std::array<MatStaticChannel, 11> kMatStaticChannels = {{
+    {0, 0, L"FL", -30.0, 0.0},
+    {1, 1, L"FR", 30.0, 0.0},
+    {2, 2, L"FC", 0.0, 0.0},
+    {3, 6, L"SL", -90.0, 0.0},
+    {4, 7, L"SR", 90.0, 0.0},
+    {5, 4, L"BL", -150.0, 0.0},
+    {6, 5, L"BR", 150.0, 0.0},
+    {7, 8, L"TFL", -45.0, 1.0},
+    {8, 9, L"TFR", 45.0, 1.0},
+    {9, 8, L"TBL", -135.0, 1.0},
+    {10, 9, L"TBR", 135.0, 1.0},
 }};
 
 std::int16_t ReadMatPcm16(const BYTE* sample, const bool bigEndian) {
@@ -105,6 +113,26 @@ struct Mat712DecodeStats {
 
 class Mat712Decoder {
 public:
+    Mat712Decoder() = default;
+
+    explicit Mat712Decoder(const SpeakerLayout& layout)
+        : layout_(&layout), outputChannels_(layout.speakers.size()) {
+        staticGains_.reserve(kMatStaticChannels.size());
+        for (const MatStaticChannel& channel : kMatStaticChannels) {
+            std::vector<double> gains(outputChannels_);
+            const auto exact = layout.FindSpeaker(channel.speakerName);
+            if (exact.has_value()) {
+                gains[*exact] = 1.0;
+            } else {
+                gains = PanDirection(layout, channel.azimuthDegrees, channel.height);
+            }
+            staticGains_.push_back(std::move(gains));
+        }
+        const auto lfe = layout.FindSpeaker(L"LFE");
+        if (!lfe.has_value()) throw std::runtime_error("MAT layout does not contain LFE");
+        lfeOutputChannel_ = *lfe;
+    }
+
     std::vector<std::int16_t> DecodeBurst(const BYTE* payload, const std::size_t payloadBytes) {
         const auto logicalPayload = UnswapMatTransportWords(payload, payloadBytes);
         const auto fullBandMarkers = FindBytePattern(logicalPayload, kMatFullBandMarker);
@@ -136,31 +164,45 @@ public:
         if (validMarkers && !validObjectMetadata) ++stats_.objectMetadataFailures;
 
         std::vector<std::int16_t> output(
-            kMatOutputFramesPerHalf * 2 * kMatOutputChannels, std::int16_t{0});
-        std::vector<double> mixed(kMatOutputFramesPerHalf * kMatOutputChannels);
+            kMatOutputFramesPerHalf * 2 * outputChannels_, std::int16_t{0});
+        std::vector<double> mixed(kMatOutputFramesPerHalf * outputChannels_);
         for (std::size_t half = 0; half < 2; ++half) {
             std::fill(mixed.begin(), mixed.end(), 0.0);
             std::int16_t* halfOutput =
-                output.data() + half * kMatOutputFramesPerHalf * kMatOutputChannels;
+                output.data() + half * kMatOutputFramesPerHalf * outputChannels_;
             if (!validMarkers) continue;
 
-            for (const MatStaticChannel& channel : kMatStaticChannels) {
+            const std::size_t staticChannelCount = layout_ == nullptr
+                                                       ? kMatLegacyStaticChannelCount
+                                                       : kMatStaticChannels.size();
+            for (std::size_t staticIndex = 0;
+                 staticIndex < staticChannelCount; ++staticIndex) {
+                const MatStaticChannel& channel = kMatStaticChannels[staticIndex];
                 const std::size_t markerIndex =
                     half * kMatFullBandSlotsPerHalf + channel.fullBandSlot;
                 const BYTE* source = logicalPayload.data() + fullBandMarkers[markerIndex] +
                                      kMatFullBandMarker.size();
                 for (std::size_t frame = 0; frame < kMatOutputFramesPerHalf; ++frame) {
-                    mixed[frame * kMatOutputChannels + channel.outputChannel] +=
-                        static_cast<double>(ReadMatPcm16(
-                            source + frame * sizeof(std::int16_t), true)) / 32768.0;
+                    const double sample = static_cast<double>(ReadMatPcm16(
+                        source + frame * sizeof(std::int16_t), true)) / 32768.0;
+                    if (layout_ == nullptr) {
+                        mixed[frame * outputChannels_ + channel.outputChannel] += sample;
+                    } else {
+                        for (std::size_t outputChannel = 0;
+                             outputChannel < outputChannels_; ++outputChannel) {
+                            mixed[frame * outputChannels_ + outputChannel] +=
+                                sample * staticGains_[staticIndex][outputChannel];
+                        }
+                    }
                 }
             }
 
             const BYTE* lfeSource = logicalPayload.data() + lfeMarkers[half] +
                                     kMatLfeMarker.size();
             for (std::size_t frame = 0; frame < kMatOutputFramesPerHalf; ++frame) {
-                mixed[frame * kMatOutputChannels + 3] += static_cast<double>(ReadMatPcm16(
-                    lfeSource + (frame / 4) * sizeof(std::int16_t), true)) / 32768.0;
+                mixed[frame * outputChannels_ + lfeOutputChannel_] +=
+                    static_cast<double>(ReadMatPcm16(
+                        lfeSource + (frame / 4) * sizeof(std::int16_t), true)) / 32768.0;
             }
 
             if (validObjectMetadata) {
@@ -171,15 +213,21 @@ public:
                                          kMatFullBandMarker.size();
                     const auto fields = DecodeMatObjectFields(
                         logicalPayload, objectTables[half], object);
-                    const auto gains = MatObject712Gains(fields);
+                    std::vector<double> gains;
+                    if (layout_ != nullptr) {
+                        gains = PanMatObject(*layout_, fields);
+                    } else {
+                        const auto legacyGains = MatObject712Gains(fields);
+                        gains.assign(legacyGains.begin(), legacyGains.end());
+                    }
                     bool active = false;
                     for (std::size_t frame = 0; frame < kMatOutputFramesPerHalf; ++frame) {
                         const std::int16_t sample = ReadMatPcm16(
                             source + frame * sizeof(std::int16_t), true);
                         active = active || sample != 0;
                         const double normalized = static_cast<double>(sample) / 32768.0;
-                        for (std::size_t channel = 0; channel < kMatOutputChannels; ++channel) {
-                            mixed[frame * kMatOutputChannels + channel] +=
+                        for (std::size_t channel = 0; channel < outputChannels_; ++channel) {
+                            mixed[frame * outputChannels_ + channel] +=
                                 normalized * gains[channel];
                         }
                     }
@@ -203,8 +251,13 @@ public:
 
     const Mat712DecodeStats& Stats() const { return stats_; }
     void ResetSynchronization() { warmupBursts_ = 0; }
+    std::size_t OutputChannels() const { return outputChannels_; }
 
 private:
+    const SpeakerLayout* layout_{};
+    std::size_t outputChannels_{kMatOutputChannels};
+    std::size_t lfeOutputChannel_{3};
+    std::vector<std::vector<double>> staticGains_;
     Mat712DecodeStats stats_;
     std::size_t warmupBursts_{};
 };
@@ -383,6 +436,72 @@ void ExtractMat712Wave(const std::filesystem::path& inputPath,
         std::wcout << L"  " << std::setw(3) << channelNames[channel] << L": "
                    << std::fixed << std::setprecision(2) << std::setw(7) << Decibels(rms)
                    << L" / " << std::setw(7) << Decibels(peak) << L"\n";
+    }
+}
+
+void AnalyzeMatLayout(const std::filesystem::path& inputPath,
+                      const std::filesystem::path& layoutPath) {
+    const WaveImage image = ReadWaveImage(inputPath);
+    const auto* inputFormat = reinterpret_cast<const WAVEFORMATEX*>(image.formatBytes.data());
+    if (inputFormat->wFormatTag != WAVE_FORMAT_EXTENSIBLE ||
+        image.formatBytes.size() < sizeof(WAVEFORMATEXTENSIBLE) ||
+        inputFormat->nChannels != 8 || inputFormat->nSamplesPerSec != 192'000 ||
+        inputFormat->wBitsPerSample != 16 || inputFormat->nBlockAlign != 16) {
+        throw std::runtime_error("Layout analyzer requires an 8-channel MAT WAV");
+    }
+    const auto* inputExtensible =
+        reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(inputFormat);
+    if (!IsEqualGUID(inputExtensible->SubFormat, kDolbyMat21Profile3)) {
+        throw std::runtime_error("Layout analyzer requires MAT 2.1 Profile 3");
+    }
+
+    const SpeakerLayout layout = LoadSpeakerLayout(layoutPath);
+    const BYTE* data = image.bytes.data() + image.dataOffset;
+    std::vector<std::size_t> preambles;
+    for (std::size_t offset = 0; offset + 8 <= image.dataBytes; ++offset) {
+        if (data[offset] == 0x72 && data[offset + 1] == 0xf8 &&
+            data[offset + 2] == 0x1f && data[offset + 3] == 0x4e &&
+            ReadLittleUint16(data + offset + 4) == 0x16) {
+            preambles.push_back(offset);
+        }
+    }
+    if (preambles.empty()) throw std::runtime_error("No MAT IEC 61937 bursts were found");
+
+    Mat712Decoder decoder(layout);
+    std::vector<long double> squareSums(layout.speakers.size());
+    std::vector<double> peaks(layout.speakers.size());
+    std::uint64_t outputFrames = 0;
+    for (std::size_t burst = 0; burst < preambles.size(); ++burst) {
+        const std::size_t payloadOffset = preambles[burst] + 8;
+        const std::size_t payloadBytes = burst + 1 < preambles.size()
+                                             ? preambles[burst + 1] - payloadOffset
+                                             : image.dataBytes - payloadOffset;
+        if (payloadBytes < 60'000) break;
+        const auto output = decoder.DecodeBurst(data + payloadOffset, payloadBytes);
+        for (std::size_t frame = 0; frame < 960; ++frame) {
+            for (std::size_t channel = 0; channel < layout.speakers.size(); ++channel) {
+                const double sample = static_cast<double>(
+                    output[frame * layout.speakers.size() + channel]) / 32768.0;
+                squareSums[channel] += sample * sample;
+                peaks[channel] = std::max(peaks[channel], std::abs(sample));
+            }
+        }
+        outputFrames += 960;
+    }
+
+    const Mat712DecodeStats& stats = decoder.Stats();
+    std::wcout << L"MAT layout analysis: " << layout.name << L"\n"
+               << L"  bursts=" << stats.bursts << L", frames=" << outputFrames
+               << L", malformed=" << stats.malformedBursts
+               << L", clipped=" << stats.clippedSamples << L"\n"
+               << L"Channel RMS / peak dBFS:\n";
+    for (std::size_t channel = 0; channel < layout.speakers.size(); ++channel) {
+        const double rms = outputFrames == 0
+                               ? 0.0
+                               : std::sqrt(static_cast<double>(squareSums[channel] / outputFrames));
+        std::wcout << L"  " << std::setw(4) << layout.speakers[channel].name << L": "
+                   << std::fixed << std::setprecision(2) << std::setw(7) << Decibels(rms)
+                   << L" / " << std::setw(7) << Decibels(peaks[channel]) << L"\n";
     }
 }
 
@@ -818,6 +937,113 @@ void PlayLiveMat712(const double seconds,
                << L"  rear clock=" << std::setprecision(6) << rearSeconds
                << L" s, height clock=" << heightSeconds << L" s, delta="
                << std::setprecision(3) << (heightSeconds - rearSeconds) * 1000.0 << L" ms\n";
+}
+
+void PlayLiveMatLayout(const double seconds,
+                       const std::filesystem::path& layoutPath,
+                       const double gain,
+                       const DWORD prebufferMilliseconds) {
+    if (gain < 0.0 || gain > 1.0) {
+        throw std::runtime_error("Live layout gain must be between 0 and 1");
+    }
+
+    const SpeakerLayout layout = LoadSpeakerLayout(layoutPath);
+    WinHandle device = OpenMatCaptureDevice();
+    ResetMatCapture(device.Get());
+    MultiEndpointRenderer renderer(layout, gain);
+    Mat712Decoder decoder(layout);
+    Mat712StreamFramer framer;
+    InterleavedPcmQueue queue(layout.speakers.size());
+    constexpr std::size_t requestPayloadBytes = 256U * 1024U;
+    std::vector<BYTE> request(sizeof(MAT_CAPTURE_READ_HEADER) + requestPayloadBytes);
+    const std::uint64_t prebufferFrames =
+        std::max<std::uint64_t>(960, static_cast<std::uint64_t>(prebufferMilliseconds) * 48);
+    std::uint64_t expectedSequence = 0;
+    std::uint64_t sequenceGaps = 0;
+    std::uint64_t ringBytes = 0;
+    std::uint64_t maximumQueuedFrames = 0;
+    bool haveSequence = false;
+    bool acceptingInput = true;
+
+    std::wcout << L"Live MAT configurable layout: " << layout.name << L"\n"
+               << L"  speakers=" << layout.speakers.size()
+               << L", outputs=" << layout.outputs.size() << L"\n";
+    const auto initialStats = renderer.Stats();
+    for (const EndpointRenderStats& output : initialStats) {
+        std::wcout << L"  " << output.routeName << L": " << output.endpointName
+                   << (output.isMaster ? L" [master]" : L"") << L"\n";
+    }
+    std::wcout << L"  gain=" << std::fixed << std::setprecision(2) << gain
+               << L", prebuffer=" << prebufferMilliseconds << L" ms\n";
+
+    const auto startTime = std::chrono::steady_clock::now();
+    const auto deadline = startTime + std::chrono::duration<double>(seconds);
+    auto lastPayloadTime = startTime;
+    try {
+        while (true) {
+            const auto now = std::chrono::steady_clock::now();
+            if (acceptingInput) {
+                const MatCaptureReadView read = ReadMatCapture(device.Get(), request);
+                if (read.header.PayloadBytes != 0) {
+                    if (haveSequence && read.header.FirstByteSequence != expectedSequence) {
+                        sequenceGaps += read.header.FirstByteSequence > expectedSequence
+                            ? read.header.FirstByteSequence - expectedSequence
+                            : expectedSequence - read.header.FirstByteSequence;
+                        framer.Reset();
+                        decoder.ResetSynchronization();
+                    }
+                    haveSequence = true;
+                    expectedSequence = read.header.FirstByteSequence + read.header.PayloadBytes;
+                    ringBytes += read.header.PayloadBytes;
+                    lastPayloadTime = now;
+                    auto pcm = framer.Push(read.payload, read.header.PayloadBytes, decoder);
+                    if (!pcm.empty()) {
+                        queue.Append(std::move(pcm));
+                        maximumQueuedFrames = std::max(
+                            maximumQueuedFrames, renderer.MinimumFramesAvailable(queue));
+                    }
+                }
+                if (now >= deadline) acceptingInput = false;
+            }
+
+            const std::uint64_t queuedForAll = renderer.MinimumFramesAvailable(queue);
+            if (!renderer.IsStarted() &&
+                (queuedForAll >= prebufferFrames || (!acceptingInput && queuedForAll != 0))) {
+                renderer.Prime(queue);
+                renderer.Start();
+            }
+
+            if (renderer.IsStarted()) {
+                const bool activeCarrier = acceptingInput &&
+                    now - lastPayloadTime < std::chrono::milliseconds(40);
+                renderer.Service(queue, activeCarrier, 2);
+                renderer.DiscardConsumed(queue);
+            } else {
+                Sleep(2);
+            }
+
+            if (!acceptingInput && (!renderer.IsStarted() || renderer.IsDrained(queue))) break;
+        }
+    } catch (...) {
+        renderer.Stop();
+        throw;
+    }
+
+    if (!renderer.IsStarted()) {
+        throw std::runtime_error("No complete MAT bursts arrived before the live timeout");
+    }
+    renderer.Stop();
+    const MAT_CAPTURE_STATS ringStats = QueryMatCaptureStats(device.Get());
+    const Mat712DecodeStats& decodeStats = decoder.Stats();
+    std::wcout << L"Live MAT layout playback complete\n"
+               << L"  ring bytes=" << ringBytes << L", driver dropped="
+               << ringStats.DroppedBytes << L", sequence gaps=" << sequenceGaps << L"\n"
+               << L"  bursts=" << decodeStats.bursts << L", malformed="
+               << decodeStats.malformedBursts << L", clipped=" << decodeStats.clippedSamples
+               << L", framer discarded=" << framer.DiscardedBytes()
+               << L", buffered=" << framer.BufferedBytes() << L"\n"
+               << L"  max PCM queue=" << maximumQueuedFrames << L" frames\n";
+    PrintEndpointRenderStats(renderer.Stats());
 }
 
 

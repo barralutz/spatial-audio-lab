@@ -253,6 +253,13 @@ std::vector<SpatialTone> Spatial712Objects() {
     };
 }
 
+std::vector<SpatialTone> Spatial714Objects() {
+    std::vector<SpatialTone> result = Spatial712Objects();
+    result.push_back({AudioObjectType_TopBackLeft, 1200.0f});
+    result.push_back({AudioObjectType_TopBackRight, 1800.0f});
+    return result;
+}
+
 AudioObjectType SpatialObjectTypeFromName(const std::wstring& name) {
     if (name == L"fl") return AudioObjectType_FrontLeft;
     if (name == L"fr") return AudioObjectType_FrontRight;
@@ -264,6 +271,8 @@ AudioObjectType SpatialObjectTypeFromName(const std::wstring& name) {
     if (name == L"br") return AudioObjectType_BackRight;
     if (name == L"tfl") return AudioObjectType_TopFrontLeft;
     if (name == L"tfr") return AudioObjectType_TopFrontRight;
+    if (name == L"tbl") return AudioObjectType_TopBackLeft;
+    if (name == L"tbr") return AudioObjectType_TopBackRight;
     return AudioObjectType_None;
 }
 
@@ -323,6 +332,8 @@ void SpatialSignalTest(const double seconds, const std::wstring& filter,
     } else if (mode == L"bed" || mode == L"712") {
         tones = Spatial712Objects();
         if (mode == L"bed") tones.resize(8);
+    } else if (mode == L"714") {
+        tones = Spatial714Objects();
     } else if (mode == L"dynamic") {
         if (maxDynamicObjects == 0) {
             throw std::runtime_error("The active spatial renderer exposes no dynamic objects");
@@ -339,6 +350,7 @@ void SpatialSignalTest(const double seconds, const std::wstring& filter,
         else if (positionName == L"left") dynamicPosition = {-1.0f, 0.0f, 0.0f};
         else if (positionName == L"right") dynamicPosition = {1.0f, 0.0f, 0.0f};
         else if (positionName == L"above") dynamicPosition = {0.0f, 1.0f, 0.0f};
+        else if (positionName == L"above-behind") dynamicPosition = {0.0f, 1.0f, 1.0f};
         else if (positionName == L"below") dynamicPosition = {0.0f, -1.0f, 0.0f};
         else if (positionName == L"front") dynamicPosition = {0.0f, 0.0f, -1.0f};
         else if (positionName == L"behind") dynamicPosition = {0.0f, 0.0f, 1.0f};
@@ -361,7 +373,7 @@ void SpatialSignalTest(const double seconds, const std::wstring& filter,
         }
     } else {
         throw std::runtime_error(
-            "Spatial mode must be bed, height, 712, dynamic, silence, or impulse-<channel>");
+            "Spatial mode must be bed, height, 712, 714, dynamic, silence, or impulse-<channel>");
     }
 
     AudioObjectType staticMask = AudioObjectType_None;

@@ -1,6 +1,8 @@
 #include "audio_platform.h"
 #include "commands.h"
 #include "mat_capture_client.h"
+#include "multi_endpoint_renderer.h"
+#include "speaker_layout.h"
 
 #include <filesystem>
 #include <iostream>
@@ -15,18 +17,22 @@ void PrintUsage() {
         << L"dolby-probe set-default [endpoint-filter]\n"
         << L"dolby-probe render-test [seconds] [endpoint-filter] [pcm|mat20|mat21]\n"
         << L"dolby-probe spatial-test [seconds] [endpoint-filter] "
-           L"[bed|height|712|dynamic|dynamic-<position>|silence|impulse-<channel>]\n"
+           L"[bed|height|712|714|dynamic|dynamic-<position>|silence|impulse-<channel>]\n"
         << L"dolby-probe capture [seconds] [endpoint-filter] [output.wav]\n"
         << L"dolby-probe capture-process [seconds] [pid] [output.wav]\n"
         << L"dolby-probe capture-mat-ring [seconds] [output.wav] [poll-ms]\n"
         << L"dolby-probe analyze input.wav\n"
         << L"dolby-probe analyze-mat input.wav\n"
+        << L"dolby-probe analyze-mat-layout input.wav layout.ini\n"
         << L"dolby-probe compare-mat-positions origin.wav left.wav right.wav above.wav "
            L"front.wav behind.wav\n"
         << L"dolby-probe analyze-mat-positions input.wav\n"
         << L"dolby-probe extract-mat-712 input.wav output.wav\n\n"
         << L"dolby-probe play-712 input.wav [rear-filter] [height-filter] [gain] [repeat]\n\n"
         << L"dolby-probe live-712 [seconds] [rear-filter] [height-filter] [gain] [prebuffer-ms]\n\n"
+        << L"dolby-probe test-layout [seconds] [layout.ini] [gain]\n"
+        << L"dolby-probe test-speaker [seconds] [layout.ini] [speaker] [gain]\n"
+        << L"dolby-probe live-layout [seconds] [layout.ini] [gain] [prebuffer-ms]\n\n"
         << L"An empty endpoint filter selects the default render endpoint.\n";
 }
 } // namespace dolby
@@ -122,6 +128,53 @@ int wmain(const int argc, wchar_t** argv) {
             return 0;
         }
 
+        if (command == L"test-layout") {
+            const double seconds = argc >= 3 ? std::stod(argv[2]) : 30.0;
+            const std::filesystem::path layoutPath =
+                argc >= 4 ? argv[3] : L"configs\\realtek-c1u-714.ini";
+            const double gain = argc >= 5 ? std::stod(argv[4]) : 0.0;
+            if (seconds <= 0.0 || seconds > 3'600.0 || gain < 0.0 || gain > 1.0) {
+                throw std::runtime_error(
+                    "test-layout requires 0 < seconds <= 3600 and 0 <= gain <= 1");
+            }
+            TestSpeakerLayout(seconds, LoadSpeakerLayout(layoutPath), gain);
+            return 0;
+        }
+
+        if (command == L"test-speaker") {
+            if (argc < 5) {
+                throw std::runtime_error(
+                    "test-speaker requires seconds, layout INI and speaker name");
+            }
+            const double seconds = std::stod(argv[2]);
+            const std::filesystem::path layoutPath = argv[3];
+            const std::wstring speakerName = argv[4];
+            const double gain = argc >= 6 ? std::stod(argv[5]) : 0.10;
+            if (seconds <= 0.0 || seconds > 60.0 || gain < 0.0 || gain > 1.0) {
+                throw std::runtime_error(
+                    "test-speaker requires 0 < seconds <= 60 and 0 <= gain <= 1");
+            }
+            TestSpeakerLayout(seconds, LoadSpeakerLayout(layoutPath), gain, speakerName);
+            return 0;
+        }
+
+        if (command == L"live-layout") {
+            const double seconds = argc >= 3 ? std::stod(argv[2]) : 60.0;
+            const std::filesystem::path layoutPath =
+                argc >= 4 ? argv[3] : L"configs\\realtek-c1u-714.ini";
+            const double gain = argc >= 5 ? std::stod(argv[4]) : 0.25;
+            const DWORD prebufferMilliseconds =
+                argc >= 6 ? static_cast<DWORD>(std::stoul(argv[5])) : 80;
+            if (seconds <= 0.0 || seconds > 3'600.0 || gain < 0.0 || gain > 1.0 ||
+                prebufferMilliseconds < 20 || prebufferMilliseconds > 500) {
+                throw std::runtime_error(
+                    "live-layout requires 0 < seconds <= 3600, 0 <= gain <= 1 and "
+                    "20 <= prebuffer-ms <= 500");
+            }
+            PlayLiveMatLayout(seconds, layoutPath, gain, prebufferMilliseconds);
+            return 0;
+        }
+
         if (command == L"capture-process") {
             if (argc < 4) {
                 throw std::runtime_error("capture-process requires seconds and a process ID");
@@ -158,6 +211,15 @@ int wmain(const int argc, wchar_t** argv) {
         if (command == L"analyze-mat") {
             if (argc < 3) throw std::runtime_error("analyze-mat requires an input WAV path");
             AnalyzeMatWave(argv[2]);
+            return 0;
+        }
+
+        if (command == L"analyze-mat-layout") {
+            if (argc != 4) {
+                throw std::runtime_error(
+                    "analyze-mat-layout requires an input WAV and a layout INI");
+            }
+            AnalyzeMatLayout(argv[2], argv[3]);
             return 0;
         }
 
