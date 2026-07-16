@@ -225,6 +225,90 @@
               </DataGrid>
             </Grid>
           </TabItem>
+          <TabItem Header="MAT">
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+              <StackPanel Margin="8,18,8,8">
+                <Grid Margin="0,0,0,22">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="18" />
+                    <ColumnDefinition Width="*" />
+                  </Grid.ColumnDefinitions>
+                  <Ellipse x:Name="MatStatusDot" Width="10" Height="10"
+                           Fill="#8B949A" HorizontalAlignment="Left"
+                           VerticalAlignment="Center" />
+                  <TextBlock Grid.Column="1" x:Name="MatStatusText" Text="Comprobando..."
+                             FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" />
+                </Grid>
+
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="80" />
+                  </Grid.ColumnDefinitions>
+                  <TextBlock Text="Ganancia" />
+                  <TextBlock Grid.Column="1" x:Name="MatGainValue" TextAlignment="Right" />
+                </Grid>
+                <Slider x:Name="MatGainSlider" Minimum="0" Maximum="1" Value="0.25"
+                        TickFrequency="0.01" ValueChanged="MatControlChanged" />
+
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="80" />
+                  </Grid.ColumnDefinitions>
+                  <TextBlock Text="Prebuffer" />
+                  <TextBlock Grid.Column="1" x:Name="MatPrebufferValue" TextAlignment="Right" />
+                </Grid>
+                <Slider x:Name="MatPrebufferSlider" Minimum="20" Maximum="500" Value="80"
+                        TickFrequency="10" IsSnapToTickEnabled="True"
+                        ValueChanged="MatControlChanged" />
+
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="80" />
+                  </Grid.ColumnDefinitions>
+                  <TextBlock Text="Duracion" />
+                  <TextBlock Grid.Column="1" x:Name="MatDurationValue" TextAlignment="Right" />
+                </Grid>
+                <Slider x:Name="MatDurationSlider" Minimum="1" Maximum="60" Value="60"
+                        TickFrequency="1" IsSnapToTickEnabled="True"
+                        ValueChanged="MatControlChanged" />
+
+                <Grid Margin="0,12,0,0">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="10" />
+                    <ColumnDefinition Width="*" />
+                  </Grid.ColumnDefinitions>
+                  <Button x:Name="MatStartButton" Height="42" Click="StartMatClick">
+                    <StackPanel Orientation="Horizontal">
+                      <TextBlock FontFamily="Segoe Fluent Icons" Text="&#xE768;"
+                                 FontSize="16" Margin="0,0,8,0" />
+                      <TextBlock Text="Iniciar" />
+                    </StackPanel>
+                  </Button>
+                  <Button Grid.Column="2" x:Name="MatStopButton" Height="42"
+                          Click="StopMatClick" IsEnabled="False">
+                    <StackPanel Orientation="Horizontal">
+                      <TextBlock FontFamily="Segoe Fluent Icons" Text="&#xE71A;"
+                                 FontSize="16" Margin="0,0,8,0" />
+                      <TextBlock Text="Detener" />
+                    </StackPanel>
+                  </Button>
+                </Grid>
+
+                <Button x:Name="MatOpenLogButton" Height="36" Margin="0,12,0,0"
+                        Click="OpenMatLogClick">
+                  <StackPanel Orientation="Horizontal">
+                    <TextBlock FontFamily="Segoe Fluent Icons" Text="&#xE8A5;"
+                               FontSize="15" Margin="0,0,8,0" />
+                    <TextBlock Text="Abrir registro" />
+                  </StackPanel>
+                </Button>
+              </StackPanel>
+            </ScrollViewer>
+          </TabItem>
         </TabControl>
       </Border>
     </Grid>

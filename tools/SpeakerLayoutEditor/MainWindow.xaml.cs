@@ -1,14 +1,17 @@
 using Microsoft.Win32;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Security.Principal;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
+using System.Windows.Threading;
 using IOPath = System.IO.Path;
 
 namespace SpeakerLayoutEditor;
@@ -34,6 +37,9 @@ public partial class MainWindow : Window {
 
     readonly string repoRoot;
     readonly List<AudioEndpointInfo> activeEndpoints = [];
+    readonly DispatcherTimer matStatusTimer = new() {
+        Interval = TimeSpan.FromSeconds(1)
+    };
     LayoutDocument? document;
     SpeakerDefinition? selectedSpeaker;
     string? currentPath;
@@ -44,17 +50,23 @@ public partial class MainWindow : Window {
     Vector dragPointerOffset;
     bool dragActivated;
     bool updatingEndpointChoices;
+    bool matCommandRunning;
     public ObservableCollection<EndpointChoice> EndpointChoices { get; } = [];
 
     public MainWindow() {
         InitializeComponent();
         repoRoot = FindRepoRoot();
         Loaded += WindowLoaded;
+        Closed += (_, _) => matStatusTimer.Stop();
+        matStatusTimer.Tick += (_, _) => UpdateMatStatus();
+        UpdateMatControlLabels();
     }
 
     async void WindowLoaded(object sender, RoutedEventArgs e) {
         LoadProfile(IOPath.Combine(repoRoot, "configs", "realtek-c1u-714.ini"));
         await RefreshEndpointsAsync();
+        UpdateMatStatus();
+        matStatusTimer.Start();
     }
 
     static string FindRepoRoot() {
@@ -196,6 +208,156 @@ public partial class MainWindow : Window {
         int closingBrace = endpointId.LastIndexOf('}');
         int start = Math.Max(0, closingBrace - 8);
         return endpointId[start..Math.Max(start, closingBrace)];
+    }
+
+    void MatControlChanged(object sender, RoutedPropertyChangedEventArgs<double> e) =>
+        UpdateMatControlLabels();
+
+    void UpdateMatControlLabels() {
+        if (MatGainValue is null || MatPrebufferValue is null || MatDurationValue is null) return;
+        MatGainValue.Text = MatGainSlider.Value.ToString("0.00", CultureInfo.InvariantCulture);
+        MatPrebufferValue.Text = $"{Math.Round(MatPrebufferSlider.Value):0} ms";
+        MatDurationValue.Text = $"{Math.Round(MatDurationSlider.Value):0} min";
+    }
+
+    string MatPidPath => IOPath.Combine(repoRoot, "captures", "live-714.pid");
+    string MatLogPath => IOPath.Combine(repoRoot, "captures", "live-714.log");
+
+    bool TryGetLiveMatProcess(out Process? process) {
+        process = null;
+        try {
+            if (!File.Exists(MatPidPath)) return false;
+            string value = File.ReadAllText(MatPidPath).Trim();
+            if (!int.TryParse(value, out int processId)) return false;
+            process = Process.GetProcessById(processId);
+            return !process.HasExited && process.ProcessName.Equals(
+                "dolby-probe", StringComparison.OrdinalIgnoreCase);
+        } catch (Exception error) when (error is ArgumentException or IOException or
+                                            InvalidOperationException or UnauthorizedAccessException) {
+            process?.Dispose();
+            process = null;
+            return false;
+        }
+    }
+
+    void UpdateMatStatus() {
+        bool running = TryGetLiveMatProcess(out Process? process);
+        using (process) {
+            if (!matCommandRunning) {
+                MatStatusText.Text = running ? $"MAT activo · PID {process!.Id}" : "MAT detenido";
+            }
+        }
+        MatStatusDot.Fill = new SolidColorBrush(running
+            ? Color.FromRgb(55, 145, 99)
+            : Color.FromRgb(139, 148, 154));
+        if (!matCommandRunning) {
+            MatStartButton.IsEnabled = !running;
+            MatStopButton.IsEnabled = running;
+        }
+        MatGainSlider.IsEnabled = !running && !matCommandRunning;
+        MatPrebufferSlider.IsEnabled = !running && !matCommandRunning;
+        MatDurationSlider.IsEnabled = !running && !matCommandRunning;
+        MatOpenLogButton.IsEnabled = File.Exists(MatLogPath);
+    }
+
+    async void StartMatClick(object sender, RoutedEventArgs e) {
+        if (currentPath is null) return;
+        if (TryGetLiveMatProcess(out Process? existing)) {
+            existing?.Dispose();
+            UpdateMatStatus();
+            return;
+        }
+        if (!SaveProfile(currentPath)) return;
+        int durationSeconds = (int)Math.Round(MatDurationSlider.Value) * 60;
+        string[] arguments = [
+            "-DurationSeconds", durationSeconds.ToString(CultureInfo.InvariantCulture),
+            "-Gain", MatGainSlider.Value.ToString("0.###", CultureInfo.InvariantCulture),
+            "-PrebufferMilliseconds",
+            ((int)Math.Round(MatPrebufferSlider.Value)).ToString(CultureInfo.InvariantCulture),
+            "-Layout", currentPath
+        ];
+        await RunMatCommandAsync("Start-Live714.ps1", arguments, "iniciar");
+    }
+
+    async void StopMatClick(object sender, RoutedEventArgs e) =>
+        await RunMatCommandAsync("Stop-Live714.ps1", [], "detener");
+
+    async Task RunMatCommandAsync(string scriptName, string[] arguments, string operation) {
+        matCommandRunning = true;
+        MatStartButton.IsEnabled = false;
+        MatStopButton.IsEnabled = false;
+        MatStatusText.Text = operation == "iniciar" ? "Iniciando MAT..." : "Deteniendo MAT...";
+        try {
+            ScriptResult result = await RunPowerShellScriptAsync(
+                IOPath.Combine(repoRoot, "tools", scriptName), arguments);
+            if (result.ExitCode != 0) {
+                string detail = string.IsNullOrWhiteSpace(result.Error)
+                    ? result.Output.Trim()
+                    : result.Error.Trim();
+                throw new InvalidOperationException(string.IsNullOrWhiteSpace(detail)
+                    ? $"No se pudo {operation} MAT (codigo {result.ExitCode})."
+                    : detail);
+            }
+            await Task.Delay(350);
+            UpdateMatStatus();
+            StatusText.Text = operation == "iniciar" ? "MAT iniciado" : "MAT detenido";
+        } catch (Win32Exception error) when (error.NativeErrorCode == 1223) {
+            StatusText.Text = "Operacion MAT cancelada";
+        } catch (Exception error) {
+            MessageBox.Show(this, error.Message, $"No se pudo {operation} MAT",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+            StatusText.Text = $"Error al {operation} MAT";
+        } finally {
+            matCommandRunning = false;
+            UpdateMatStatus();
+        }
+    }
+
+    sealed record ScriptResult(int ExitCode, string Output, string Error);
+
+    async Task<ScriptResult> RunPowerShellScriptAsync(string scriptPath, string[] arguments) {
+        bool elevated = IsElevated();
+        ProcessStartInfo start = new("powershell.exe") {
+            UseShellExecute = !elevated,
+            WorkingDirectory = repoRoot,
+            WindowStyle = ProcessWindowStyle.Hidden
+        };
+        if (!elevated) start.Verb = "runas";
+        if (elevated) {
+            start.CreateNoWindow = true;
+            start.RedirectStandardOutput = true;
+            start.RedirectStandardError = true;
+            start.StandardOutputEncoding = Encoding.UTF8;
+            start.StandardErrorEncoding = Encoding.UTF8;
+        }
+        start.ArgumentList.Add("-NoProfile");
+        start.ArgumentList.Add("-ExecutionPolicy");
+        start.ArgumentList.Add("Bypass");
+        start.ArgumentList.Add("-File");
+        start.ArgumentList.Add(scriptPath);
+        foreach (string argument in arguments) start.ArgumentList.Add(argument);
+
+        using Process process = Process.Start(start) ??
+            throw new InvalidOperationException("No se pudo iniciar PowerShell.");
+        if (!elevated) {
+            await process.WaitForExitAsync();
+            return new ScriptResult(process.ExitCode, "", "");
+        }
+        Task<string> outputTask = process.StandardOutput.ReadToEndAsync();
+        Task<string> errorTask = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+        return new ScriptResult(process.ExitCode, await outputTask, await errorTask);
+    }
+
+    static bool IsElevated() {
+        using WindowsIdentity identity = WindowsIdentity.GetCurrent();
+        return new WindowsPrincipal(identity).IsInRole(
+            WindowsBuiltInRole.Administrator);
+    }
+
+    void OpenMatLogClick(object sender, RoutedEventArgs e) {
+        if (!File.Exists(MatLogPath)) return;
+        Process.Start(new ProcessStartInfo(MatLogPath) { UseShellExecute = true });
     }
 
     void PopulateRouteLegend() {
