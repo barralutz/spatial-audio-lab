@@ -6,6 +6,7 @@ add_executable(dolby-probe
   src/audio_platform.cpp
   src/capture_commands.cpp
   src/dolby_probe.cpp
+  src/media_foundation_probe.cpp
   src/mat_analysis.cpp
   src/mat_capture_client.cpp
   src/mat_format.cpp
@@ -16,7 +17,7 @@ add_executable(dolby-probe
 )
 target_compile_features(dolby-probe PRIVATE cxx_std_20)
 target_compile_definitions(dolby-probe PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
-target_link_libraries(dolby-probe PRIVATE ole32 uuid avrt propsys mmdevapi)
+target_link_libraries(dolby-probe PRIVATE ole32 runtimeobject windowsapp uuid avrt propsys mmdevapi mf mfplat mfreadwrite mfuuid)
 
 if(MSVC)
   target_compile_options(dolby-probe PRIVATE /W4 /permissive- /EHsc)

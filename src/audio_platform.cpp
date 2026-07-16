@@ -95,6 +95,10 @@ std::wstring SubformatName(const GUID& guid) {
     if (IsEqualGUID(guid, kDolbyMat20)) return L"Dolby MAT 2.0";
     if (IsEqualGUID(guid, kDolbyMat21Profile3)) return L"Dolby MAT 2.1 Profile 3";
     if (IsEqualGUID(guid, kDolbyMat21Profile4)) return L"Dolby MAT 2.1 Profile 4";
+    if (IsEqualGUID(guid, kDts)) return L"DTS";
+    if (IsEqualGUID(guid, kDtsHd)) return L"DTS-HD";
+    if (IsEqualGUID(guid, kDtsXE1)) return L"DTS:X E1";
+    if (IsEqualGUID(guid, kDtsXE2)) return L"DTS:X E2";
     return GuidText(guid);
 }
 
@@ -337,6 +341,9 @@ void PrintEndpoint(const Endpoint& endpoint) {
     const auto mat20_192 = MakeIec61937Format(kDolbyMat20, 192000);
     const auto mat21p3 = MakeIec61937Format(kDolbyMat21Profile3);
     const auto mat21p4 = MakeIec61937Format(kDolbyMat21Profile4);
+    const auto dtsHd = MakeIec61937Format(kDtsHd);
+    const auto dtsXE1 = MakeIec61937Format(kDtsXE1);
+    const auto dtsXE2 = MakeIec61937Format(kDtsXE2);
 
     std::wcout << L"    Format negotiation:\n";
     PrintFormatProbe(client.Get(), L"PCM 2.0 / 48 kHz / 24-in-32", &pcm20.Format);
@@ -353,6 +360,9 @@ void PrintEndpoint(const Endpoint& endpoint) {
     PrintFormatProbe(client.Get(), L"Dolby MAT 2.0 / content 192 kHz", &mat20_192.formatExt.Format);
     PrintFormatProbe(client.Get(), L"Dolby MAT 2.1 Profile 3", &mat21p3.formatExt.Format);
     PrintFormatProbe(client.Get(), L"Dolby MAT 2.1 Profile 4", &mat21p4.formatExt.Format);
+    PrintFormatProbe(client.Get(), L"DTS-HD", &dtsHd.formatExt.Format);
+    PrintFormatProbe(client.Get(), L"DTS:X E1", &dtsXE1.formatExt.Format);
+    PrintFormatProbe(client.Get(), L"DTS:X E2", &dtsXE2.formatExt.Format);
 
     ComPtr<ISpatialAudioClient> spatialClient;
     const HRESULT spatialResult = endpoint.device->Activate(__uuidof(ISpatialAudioClient), CLSCTX_ALL,

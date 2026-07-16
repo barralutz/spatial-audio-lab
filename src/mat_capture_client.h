@@ -20,5 +20,7 @@ void ResetMatCapture(HANDLE device);
 MatCaptureReadView ReadMatCapture(HANDLE device, std::vector<BYTE>& request);
 void CaptureMatRing(double seconds, const std::filesystem::path& outputPath,
                     DWORD pollMilliseconds);
+void CaptureIec61937Ring(double seconds, const std::filesystem::path& outputPath,
+                        DWORD pollMilliseconds);
 
 } // namespace dolby

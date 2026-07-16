@@ -19,6 +19,7 @@ $sources = @(
     'audio_platform.cpp',
     'capture_commands.cpp',
     'dolby_probe.cpp',
+    'media_foundation_probe.cpp',
     'mat_analysis.cpp',
     'mat_capture_client.cpp',
     'mat_format.cpp',
@@ -33,7 +34,8 @@ $compile = @(
     '/DUNICODE /D_UNICODE /DNOMINMAX /DWIN32_LEAN_AND_MEAN',
     ($sources -join ' '),
     '/Fe:dolby-probe.exe',
-    '/link ole32.lib uuid.lib avrt.lib propsys.lib mmdevapi.lib'
+    '/link ole32.lib runtimeobject.lib windowsapp.lib uuid.lib avrt.lib propsys.lib mmdevapi.lib',
+    'mf.lib mfplat.lib mfreadwrite.lib mfuuid.lib'
 ) -join ' '
 $command = '"' + $devCmd + '" -arch=x64 -host_arch=x64 >nul && cd /d "' +
     $buildRoot + '" && ' + $compile

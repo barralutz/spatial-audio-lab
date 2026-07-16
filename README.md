@@ -68,6 +68,9 @@ el mismo INI consumido por el motor. La pestaña `Salidas` enumera los endpoints
 activos en un selector, permite actualizar la lista despues de conectar hardware y conserva los
 filtros de dispositivos desconectados marcandolos como no disponibles. `Restablecer posiciones`
 devuelve azimut y elevacion al esquema 7.1.4 estandar sin cambiar niveles, endpoints ni retardos.
+La pestaña `MAT` inicia y detiene `live-layout`, controla ganancia, prebuffer y duracion, muestra el
+PID activo y abre el registro. El puente se ejecuta como proceso independiente y continua activo al
+cerrar el editor; si hace falta elevacion, Windows solicita UAC al ejecutar el script correspondiente.
 
 ```powershell
 .\tools\Build-DolbyProbe.ps1
@@ -307,6 +310,40 @@ el carrier MAT se interrumpa. Una prueba cambio la salida predeterminada a Realt
 segundos y regreso a `SinkDescription Sample`: el mismo proceso sobrevivio y reanudo el consumo
 de MAT. Esto permite cambiar temporalmente de dispositivo sin tener que reiniciar el puente.
 
+#### Estado de DTS:X para juegos
+
+El protocolo del ring es ahora v2 y conserva el subtipo KS junto con cada lectura. El driver
+`oem121.inf` captura MAT 2.0/2.1 y tambien IEC 61937 DTS, DTS-HD y DTS:X E1/E2; al cambiar el formato
+reinicia las secuencias para no mezclar carriers. Con `DTS:X para centro de entretenimiento` activo,
+una escena espacial 7.1.4 produjo 375 rafagas E1 validas, `Pc=0x0411`, sin gaps ni descartes. Los
+payloads extraidos comienzan con el substream DTS-HD `0x64582025` y las seis fixtures de posicion
+confirman que el transporte cambia con el objeto.
+
+```powershell
+.\build\dolby-probe.exe capture-iec61937-ring 10 `
+  '.\captures\dtsx-capture.wav' 2
+.\build\dolby-probe.exe analyze-iec61937 `
+  '.\captures\dtsx-capture.wav'
+.\build\dolby-probe.exe extract-dtshd `
+  '.\captures\dtsx-capture.wav' '.\captures\dtsx-capture.dts'
+```
+
+La decodificacion analogica DTS:X aun no esta habilitada. DTS Sound Unbound instala el MFT
+`DTSXDecoder`, que anuncia salida PCM 7.1 y hasta 12 objetos float con metadata. El endpoint virtual
+acepta su formato de metadata `{2736CABA-57CE-43DC-9B5D-FB14BF7907AC}` y expone 32 objetos
+dinamicos. Sin embargo, el MFT consulta el AppService de licencia de DTS antes de aceptar cualquier
+tipo de entrada. Un MSIX local permite cargar correctamente el codec y sus VCLibs, pero Store lo
+identifica como paquete de desarrollo sin licencia y `SetInputType` devuelve
+`MF_E_INVALIDMEDIATYPE`. La consulta directa con el nombre interno `CDTSXDecoder` tambien devuelve
+`Status=ERROR`. Esto es una frontera de licencia/identidad, no un error del parser IEC.
+
+`tools/Register-DolbyProbePackage.ps1` conserva este diagnostico reproducible: crea y firma el MSIX,
+registra el alias `dolby-probe-dtsx.exe` y solicita UAC una sola vez para confiar en el certificado
+local dentro de `LocalMachine\TrustedPeople`. No se debe distribuir ese certificado ni intentar
+eludir el servicio de licencia. FFmpeg reconoce el sync DTS-HD, pero no decodifica el substream
+DTS:X Profile 2 generado por el renderer de juegos; el parche de FFmpeg de marzo de 2025 citado al
+final de este documento corresponde a objetos Dolby TrueHD, no a DTS:X.
+
 Capturas de referencia:
 
 - `captures/mat21-spatial-bed-71-distinct-tones.wav`
@@ -349,12 +386,19 @@ Capturas de referencia:
   protocolo binario THDS documentado en `STREAMING_PROTOCOL.md`.
 - `tools/Capture-MatSpatialFixtures.ps1`: captura silencio y diez posiciones controladas de un
   objeto dinamico para investigar y calibrar la metadata MAT.
+- `tools/Capture-Iec61937SpatialFixture.ps1`: captura una escena DTS:X desde el ring v2 y valida el
+  subtipo IEC antes de guardarla.
+- `tools/Capture-DtsXPositionFixtures.ps1`: automatiza las seis posiciones DTS:X de referencia.
+- `tools/Register-DolbyProbePackage.ps1`: registra el probe como MSIX local para diagnosticar
+  extensiones Media Foundation de Microsoft Store.
 - `src/dolby_probe.cpp`: CLI y validacion de argumentos; no contiene logica de audio.
 - `src/audio_platform.*`: RAII de COM/handles, endpoints, formatos PCM/MAT y dispositivo
   predeterminado.
 - `src/wave_io.*`: lectura y escritura RIFF/WAVE compartida por capturas y extractores.
 - `src/capture_commands.cpp`: pruebas de transporte, Spatial Sound y loopback WASAPI.
 - `src/mat_capture_client.*`: cliente IOCTL del ring `\\.\DolbyDecoderMat`.
+- `src/media_foundation_probe.cpp`: enumeracion de MFTs, metadata espacial y diagnostico de licencia
+  del decoder DTS:X.
 - `src/mat_format.*`: operaciones comunes sobre transporte y metadata MAT.
 - `src/mat_analysis.cpp`: diagnosticos del carrier, posiciones de objetos y PCM multicanal.
 - `src/mat_pipeline.cpp`: decodificador MAT 7.1.2 compatible y ruta configurable en vivo.

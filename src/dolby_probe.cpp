@@ -35,8 +35,17 @@ void PrintUsage() {
            L"[bed|height|712|714|dynamic|dynamic-<position>|silence|impulse-<channel>]\n"
         << L"dolby-probe capture [seconds] [endpoint-filter] [output.wav]\n"
         << L"dolby-probe capture-process [seconds] [pid] [output.wav]\n"
+        << L"dolby-probe list-audio-decoders [filter] [inspect]\n"
+        << L"dolby-probe probe-winrt-decoder [runtime-class]\n"
+        << L"dolby-probe probe-spatial-metadata [endpoint-filter]\n"
+        << L"dolby-probe probe-dtsx-license [codec-name]\n"
+        << L"dolby-probe probe-dtsx-decode input.wav [max-bursts]\n"
+        << L"dolby-probe probe-media-types input-media\n"
         << L"dolby-probe capture-mat-ring [seconds] [output.wav] [poll-ms]\n"
+        << L"dolby-probe capture-iec61937-ring [seconds] [output.wav] [poll-ms]\n"
         << L"dolby-probe analyze input.wav\n"
+        << L"dolby-probe analyze-iec61937 input.wav\n"
+        << L"dolby-probe extract-dtshd input.wav output.dts\n"
         << L"dolby-probe analyze-mat input.wav\n"
         << L"dolby-probe analyze-mat-layout input.wav layout.ini\n"
         << L"dolby-probe compare-mat-positions origin.wav left.wav right.wav above.wav "
@@ -211,6 +220,50 @@ int wmain(const int argc, wchar_t** argv) {
             return 0;
         }
 
+        if (command == L"list-audio-decoders") {
+            const std::wstring filter = argc >= 3 ? argv[2] : L"";
+            const bool inspectTypes = argc >= 4 && Lowercase(argv[3]) == L"inspect";
+            ListAudioDecoders(filter, inspectTypes);
+            return 0;
+        }
+
+        if (command == L"probe-winrt-decoder") {
+            const std::wstring runtimeClass =
+                argc >= 3 ? argv[2] : L"DTSXDecoder.DTSXDecoder";
+            ProbeWinRtDecoder(runtimeClass);
+            return 0;
+        }
+
+        if (command == L"probe-spatial-metadata") {
+            const std::wstring filter = argc >= 3 ? argv[2] : L"SinkDescription Sample";
+            ProbeSpatialMetadata(filter);
+            return 0;
+        }
+
+        if (command == L"probe-dtsx-license") {
+            const std::wstring codecName = argc >= 3 ? argv[2] : L"DTSXDecoder";
+            ProbeDtsXLicense(codecName);
+            return 0;
+        }
+
+        if (command == L"probe-dtsx-decode") {
+            if (argc < 3) {
+                throw std::runtime_error("probe-dtsx-decode requires an IEC 61937 WAV path");
+            }
+            const std::size_t maxBursts = argc >= 4 ? std::stoull(argv[3]) : 16;
+            if (maxBursts == 0 || maxBursts > 10'000) {
+                throw std::runtime_error("max-bursts must be between 1 and 10000");
+            }
+            ProbeDtsXDecode(argv[2], maxBursts);
+            return 0;
+        }
+
+        if (command == L"probe-media-types") {
+            if (argc < 3) throw std::runtime_error("probe-media-types requires an input path");
+            ProbeMediaTypes(argv[2]);
+            return 0;
+        }
+
         if (command == L"capture-mat-ring") {
             const double seconds = argc >= 3 ? std::stod(argv[2]) : 10.0;
             const std::filesystem::path output = argc >= 4 ? argv[3] : L"mat-ring-capture.wav";
@@ -224,9 +277,34 @@ int wmain(const int argc, wchar_t** argv) {
             return 0;
         }
 
+        if (command == L"capture-iec61937-ring") {
+            const double seconds = argc >= 3 ? std::stod(argv[2]) : 10.0;
+            const std::filesystem::path output = argc >= 4 ? argv[3] : L"iec61937-ring-capture.wav";
+            const DWORD pollMilliseconds = argc >= 5 ? static_cast<DWORD>(std::stoul(argv[4])) : 2;
+            if (seconds <= 0.0 || seconds > 600.0 || pollMilliseconds == 0 ||
+                pollMilliseconds > 1000) {
+                throw std::runtime_error(
+                    "Ring capture requires 0 < seconds <= 600 and 0 < poll-ms <= 1000");
+            }
+            CaptureIec61937Ring(seconds, output, pollMilliseconds);
+            return 0;
+        }
+
         if (command == L"analyze") {
             if (argc < 3) throw std::runtime_error("analyze requires an input WAV path");
             AnalyzeFloatWave(argv[2]);
+            return 0;
+        }
+
+        if (command == L"analyze-iec61937") {
+            if (argc < 3) throw std::runtime_error("analyze-iec61937 requires an input WAV path");
+            AnalyzeIec61937Wave(argv[2]);
+            return 0;
+        }
+
+        if (command == L"extract-dtshd") {
+            if (argc < 4) throw std::runtime_error("extract-dtshd requires input and output paths");
+            ExtractDtsHdWave(argv[2], argv[3]);
             return 0;
         }
 

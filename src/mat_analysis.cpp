@@ -14,6 +14,7 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -22,6 +23,61 @@
 #include <vector>
 
 namespace dolby {
+
+namespace {
+
+std::wstring Iec61937DataTypeName(const std::uint16_t pc) {
+    switch (pc & 0x1fU) {
+    case 0x01: return L"AC-3";
+    case 0x0b: return L"DTS type I";
+    case 0x0c: return L"DTS type II";
+    case 0x0d: return L"DTS type III";
+    case 0x11: return L"DTS-HD type IV";
+    case 0x15: return L"E-AC-3";
+    case 0x16: return L"Dolby MAT";
+    default: return L"unknown";
+    }
+}
+
+struct Iec61937Header {
+    std::size_t offset{};
+    std::uint16_t pc{};
+    std::uint16_t pd{};
+    bool byteSwapped{};
+};
+
+std::vector<Iec61937Header> FindIec61937Headers(const BYTE* data,
+                                                const std::size_t dataBytes) {
+    std::vector<Iec61937Header> headers;
+    for (std::size_t offset = 0; offset + 8 <= dataBytes; ++offset) {
+        const bool littleEndian = data[offset] == 0x72 && data[offset + 1] == 0xf8 &&
+                                  data[offset + 2] == 0x1f && data[offset + 3] == 0x4e;
+        const bool byteSwapped = data[offset] == 0xf8 && data[offset + 1] == 0x72 &&
+                                 data[offset + 2] == 0x4e && data[offset + 3] == 0x1f;
+        if (!littleEndian && !byteSwapped) continue;
+        const auto readWord = [&](const std::size_t wordOffset) {
+            return byteSwapped
+                       ? static_cast<std::uint16_t>((data[wordOffset] << 8) |
+                                                    data[wordOffset + 1])
+                       : ReadLittleUint16(data + wordOffset);
+        };
+        headers.push_back({offset, readWord(offset + 4), readWord(offset + 6), byteSwapped});
+    }
+    return headers;
+}
+
+std::size_t Iec61937PayloadBytes(const std::uint16_t pc, const std::uint16_t pd) {
+    switch (pc & 0x1fU) {
+    case 0x11: // DTS-HD type IV
+    case 0x15: // E-AC-3
+    case 0x16: // Dolby MAT
+        return pd;
+    default:
+        return (static_cast<std::uint32_t>(pd) + 7) / 8;
+    }
+}
+
+} // namespace
 
 std::wstring SpeakerName(const DWORD speaker) {
     switch (speaker) {
@@ -54,6 +110,117 @@ std::vector<std::wstring> ChannelNames(const DWORD mask, const WORD channels) {
     }
     while (names.size() < channels) names.push_back(L"CH" + std::to_wstring(names.size() + 1));
     return names;
+}
+
+void AnalyzeIec61937Wave(const std::filesystem::path& inputPath) {
+    const WaveImage image = ReadWaveImage(inputPath);
+    const auto* format = reinterpret_cast<const WAVEFORMATEX*>(image.formatBytes.data());
+    if (format->wFormatTag != WAVE_FORMAT_EXTENSIBLE ||
+        image.formatBytes.size() < sizeof(WAVEFORMATEXTENSIBLE)) {
+        throw std::runtime_error("IEC 61937 analyzer requires WAVEFORMATEXTENSIBLE");
+    }
+
+    const BYTE* data = image.bytes.data() + image.dataOffset;
+    const std::size_t dataBytes = image.dataBytes;
+    const std::vector<Iec61937Header> headers = FindIec61937Headers(data, dataBytes);
+    if (headers.empty()) throw std::runtime_error("No IEC 61937 preambles were found");
+
+    std::map<std::uint16_t, std::size_t> typeCounts;
+    std::map<std::size_t, std::size_t> spacingCounts;
+    for (const Iec61937Header& header : headers) ++typeCounts[header.pc];
+    for (std::size_t index = 1; index < headers.size(); ++index) {
+        ++spacingCounts[headers[index].offset - headers[index - 1].offset];
+    }
+
+    const auto* extensible = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(format);
+    std::wcout << L"File: " << inputPath.wstring() << L"\n"
+               << L"Format: " << WaveFormatText(format) << L"\n"
+               << L"Data: " << dataBytes << L" bytes, " << std::fixed << std::setprecision(3)
+               << (static_cast<double>(dataBytes) / format->nAvgBytesPerSec) << L" s\n"
+               << L"Subtype: " << WaveFormatText(&extensible->Format) << L"\n"
+               << L"IEC preambles: " << headers.size() << L", first offset: "
+               << headers.front().offset << L" bytes\n";
+
+    std::wcout << L"Data types:\n";
+    for (const auto& [pc, count] : typeCounts) {
+        std::wcout << L"  Pc=0x" << std::hex << std::uppercase << pc << std::dec << L" ("
+                   << Iec61937DataTypeName(pc) << L"): " << count << L" bursts\n";
+    }
+    if (!spacingCounts.empty()) {
+        const auto commonSpacing = std::max_element(
+            spacingCounts.begin(), spacingCounts.end(),
+            [](const auto& left, const auto& right) { return left.second < right.second; });
+        std::wcout << L"Most common spacing: " << commonSpacing->first << L" bytes ("
+                   << commonSpacing->second << L" intervals)\n";
+    }
+
+    std::wcout << L"First IEC headers:\n";
+    for (std::size_t index = 0; index < std::min<std::size_t>(10, headers.size()); ++index) {
+        const Iec61937Header& header = headers[index];
+        std::wcout << L"  " << index << L": offset=" << header.offset << L", Pc=0x"
+                   << std::hex << std::uppercase << header.pc << L", Pd=0x" << header.pd
+                   << std::dec << L" (" << Iec61937PayloadBytes(header.pc, header.pd)
+                   << L" payload bytes), "
+                   << (header.byteSwapped ? L"byte-swapped" : L"little-endian") << L"\n";
+    }
+}
+
+void ExtractDtsHdWave(const std::filesystem::path& inputPath,
+                      const std::filesystem::path& outputPath) {
+    const WaveImage image = ReadWaveImage(inputPath);
+    const BYTE* data = image.bytes.data() + image.dataOffset;
+    const std::size_t dataBytes = image.dataBytes;
+    const std::vector<Iec61937Header> headers = FindIec61937Headers(data, dataBytes);
+    if (headers.empty()) throw std::runtime_error("No IEC 61937 preambles were found");
+
+    std::ofstream output(outputPath, std::ios::binary | std::ios::trunc);
+    if (!output) throw std::runtime_error("Could not create DTS-HD output file");
+
+    constexpr std::array<BYTE, 10> startCode = {
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfe, 0xfe};
+    std::size_t frames = 0;
+    std::size_t frameBytesWritten = 0;
+    std::size_t malformed = 0;
+    for (std::size_t index = 0; index < headers.size(); ++index) {
+        const Iec61937Header& header = headers[index];
+        if ((header.pc & 0x1fU) != 0x11) {
+            throw std::runtime_error("IEC 61937 stream is not DTS-HD type IV");
+        }
+        const std::size_t burstEnd = index + 1 < headers.size()
+                                         ? headers[index + 1].offset
+                                         : dataBytes;
+        const std::size_t available = burstEnd > header.offset + 8
+                                          ? burstEnd - header.offset - 8
+                                          : 0;
+        const std::size_t payloadBytes = Iec61937PayloadBytes(header.pc, header.pd);
+        if (payloadBytes < 12 || payloadBytes > available) {
+            ++malformed;
+            continue;
+        }
+        const std::vector<BYTE> logical =
+            UnswapMatTransportWords(data + header.offset + 8, payloadBytes);
+        if (!std::equal(startCode.begin(), startCode.end(), logical.begin())) {
+            ++malformed;
+            continue;
+        }
+        const std::size_t frameBytes =
+            (static_cast<std::size_t>(logical[10]) << 8) | logical[11];
+        if (frameBytes == 0 || frameBytes + 12 > logical.size()) {
+            ++malformed;
+            continue;
+        }
+        output.write(reinterpret_cast<const char*>(logical.data() + 12),
+                     static_cast<std::streamsize>(frameBytes));
+        if (!output) throw std::runtime_error("Failed while writing DTS-HD output");
+        ++frames;
+        frameBytesWritten += frameBytes;
+    }
+    output.close();
+    if (frames == 0) throw std::runtime_error("No valid DTS-HD frames were extracted");
+
+    std::wcout << L"DTS-HD extraction written: " << outputPath.wstring() << L"\n"
+               << L"Frames=" << frames << L", bytes=" << frameBytesWritten
+               << L", malformed bursts=" << malformed << L"\n";
 }
 
 double GoertzelAmplitude(const BYTE* data, const std::size_t frames, const WORD blockAlign,
