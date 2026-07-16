@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -174,6 +175,73 @@ struct ActivatedDecoder {
     ComPtr<IMFActivate> activation;
     ComPtr<IMFTransform> transform;
 };
+
+class FieldOfUseUnlockProbe final : public IMFFieldOfUseMFTUnlock {
+public:
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID interfaceId, void** object) override {
+        if (object == nullptr) return E_POINTER;
+        *object = nullptr;
+        if (interfaceId == IID_IUnknown || interfaceId == IID_IMFFieldOfUseMFTUnlock) {
+            *object = static_cast<IMFFieldOfUseMFTUnlock*>(this);
+            AddRef();
+            return S_OK;
+        }
+        return E_NOINTERFACE;
+    }
+
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++references_; }
+
+    ULONG STDMETHODCALLTYPE Release() override {
+        const ULONG remaining = --references_;
+        if (remaining == 0) delete this;
+        return remaining;
+    }
+
+    HRESULT STDMETHODCALLTYPE Unlock(IUnknown* transform) override {
+        ++calls_;
+        ComPtr<IMFTransform> mediaTransform;
+        const HRESULT query = transform != nullptr
+            ? transform->QueryInterface(IID_PPV_ARGS(&mediaTransform))
+            : E_POINTER;
+        std::wcout << L"    IMFFieldOfUseMFTUnlock::Unlock invoked; transform="
+                   << HResultText(query) << L"\n";
+        // DTS does not publish a field-of-use handshake. Do not report an unlock without one.
+        return MF_E_UNAUTHORIZED;
+    }
+
+    ULONG Calls() const { return calls_.load(); }
+
+private:
+    ~FieldOfUseUnlockProbe() = default;
+
+    std::atomic<ULONG> references_{1};
+    std::atomic<ULONG> calls_{};
+};
+
+std::vector<ComPtr<IMFActivate>> EnumerateAudioDecoders(const UINT32 flags) {
+    IMFActivate** rawActivations = nullptr;
+    UINT32 count = 0;
+    ThrowIfFailed(MFTEnumEx(MFT_CATEGORY_AUDIO_DECODER, flags, nullptr, nullptr,
+                            &rawActivations, &count),
+                  "Enumerate Media Foundation audio decoders");
+    std::vector<ComPtr<IMFActivate>> activations;
+    activations.reserve(count);
+    for (UINT32 index = 0; index < count; ++index) {
+        activations.emplace_back(rawActivations[index]);
+    }
+    CoTaskMemFree(rawActivations);
+    return activations;
+}
+
+ComPtr<IMFActivate> FindAudioDecoder(const std::vector<ComPtr<IMFActivate>>& activations,
+                                    const std::wstring& requestedName) {
+    for (const auto& activation : activations) {
+        const std::wstring name = ReadAllocatedString(
+            activation.Get(), MFT_FRIENDLY_NAME_Attribute);
+        if (Lowercase(name) == Lowercase(requestedName)) return activation;
+    }
+    return {};
+}
 
 HRESULT ActivateDecoderObject(IMFActivate* activation, const std::filesystem::path& codecPath,
                               LoadedModules& fallbackModules, IMFTransform** transform) {
@@ -752,6 +820,63 @@ void ProbeDtsXLicense(const std::wstring& codecName) {
         std::wcout << L"DTS license AppService error: " << HResultText(error.code())
                    << L" (" << error.message().c_str() << L")\n";
     }
+}
+
+void ProbeDtsXFieldOfUse() {
+    MediaFoundationSession mediaFoundation;
+    constexpr const wchar_t* decoderName = L"DTSXDecoder";
+    struct EnumerationCase {
+        const wchar_t* name;
+        UINT32 flags;
+    };
+    constexpr std::array<EnumerationCase, 3> cases = {{
+        {L"SYNCMFT", MFT_ENUM_FLAG_SYNCMFT},
+        {L"SYNCMFT | FIELDOFUSE", MFT_ENUM_FLAG_SYNCMFT | MFT_ENUM_FLAG_FIELDOFUSE},
+        {L"ALL", MFT_ENUM_FLAG_ALL},
+    }};
+
+    bool presentWithoutFieldOfUse = false;
+    ComPtr<IMFActivate> activation;
+    std::wcout << L"DTS:X Media Foundation registration:\n";
+    for (const auto& enumeration : cases) {
+        const auto activations = EnumerateAudioDecoders(enumeration.flags);
+        const auto match = FindAudioDecoder(activations, decoderName);
+        std::wcout << L"  " << enumeration.name << L": "
+                   << (match ? L"present" : L"absent") << L" ("
+                   << activations.size() << L" audio decoders)\n";
+        if (enumeration.flags == MFT_ENUM_FLAG_SYNCMFT) {
+            presentWithoutFieldOfUse = match != nullptr;
+        }
+        if (enumeration.flags == MFT_ENUM_FLAG_ALL) activation = match;
+    }
+    if (!activation) {
+        std::wcout << L"DTSXDecoder was not returned by MFTEnumEx.\n";
+        return;
+    }
+
+    std::wcout << L"Registration classification: "
+               << (presentWithoutFieldOfUse
+                       ? L"not field-of-use restricted (visible without the flag)"
+                       : L"possibly field-of-use restricted")
+               << L"\n";
+
+    auto* rawUnlock = new FieldOfUseUnlockProbe();
+    ComPtr<IMFFieldOfUseMFTUnlock> unlock;
+    unlock.Attach(rawUnlock);
+    ThrowIfFailed(activation->SetUnknown(MFT_FIELDOFUSE_UNLOCK_Attribute, unlock.Get()),
+                  "Attach field-of-use unlock probe");
+
+    static constexpr GUID kPackagedCodecPath = {
+        0x7347c815, 0x79fc, 0x4ad9,
+        {0x87, 0x7d, 0xac, 0xdf, 0x5f, 0x46, 0x68, 0x5e}};
+    const auto codecPath = ReadAllocatedString(activation.Get(), kPackagedCodecPath);
+    LoadedModules modules;
+    ComPtr<IMFTransform> transform;
+    const HRESULT activationResult = ActivateDecoderObject(
+        activation.Get(), codecPath, modules, &transform);
+    std::wcout << L"Activation with FOU callback: " << HResultText(activationResult) << L"\n"
+               << L"Unlock callback calls: " << rawUnlock->Calls() << L"\n";
+    if (SUCCEEDED(activationResult)) activation->ShutdownObject();
 }
 
 void ProbeDtsXDecode(const std::filesystem::path& inputPath, const std::size_t maxBursts) {

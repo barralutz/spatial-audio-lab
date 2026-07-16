@@ -6,6 +6,7 @@ add_executable(dolby-probe
   src/audio_platform.cpp
   src/capture_commands.cpp
   src/dolby_probe.cpp
+  src/dtsx_analysis.cpp
   src/media_foundation_probe.cpp
   src/mat_analysis.cpp
   src/mat_capture_client.cpp

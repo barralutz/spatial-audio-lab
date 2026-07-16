@@ -39,6 +39,7 @@ void PrintUsage() {
         << L"dolby-probe probe-winrt-decoder [runtime-class]\n"
         << L"dolby-probe probe-spatial-metadata [endpoint-filter]\n"
         << L"dolby-probe probe-dtsx-license [codec-name]\n"
+        << L"dolby-probe probe-dtsx-field-of-use\n"
         << L"dolby-probe probe-dtsx-decode input.wav [max-bursts]\n"
         << L"dolby-probe probe-media-types input-media\n"
         << L"dolby-probe capture-mat-ring [seconds] [output.wav] [poll-ms]\n"
@@ -46,6 +47,7 @@ void PrintUsage() {
         << L"dolby-probe analyze input.wav\n"
         << L"dolby-probe analyze-iec61937 input.wav\n"
         << L"dolby-probe extract-dtshd input.wav output.dts\n"
+        << L"dolby-probe analyze-dtsx-exss input.dts\n"
         << L"dolby-probe analyze-mat input.wav\n"
         << L"dolby-probe analyze-mat-layout input.wav layout.ini\n"
         << L"dolby-probe compare-mat-positions origin.wav left.wav right.wav above.wav "
@@ -246,6 +248,11 @@ int wmain(const int argc, wchar_t** argv) {
             return 0;
         }
 
+        if (command == L"probe-dtsx-field-of-use") {
+            ProbeDtsXFieldOfUse();
+            return 0;
+        }
+
         if (command == L"probe-dtsx-decode") {
             if (argc < 3) {
                 throw std::runtime_error("probe-dtsx-decode requires an IEC 61937 WAV path");
@@ -305,6 +312,14 @@ int wmain(const int argc, wchar_t** argv) {
         if (command == L"extract-dtshd") {
             if (argc < 4) throw std::runtime_error("extract-dtshd requires input and output paths");
             ExtractDtsHdWave(argv[2], argv[3]);
+            return 0;
+        }
+
+        if (command == L"analyze-dtsx-exss") {
+            if (argc < 3) {
+                throw std::runtime_error("analyze-dtsx-exss requires an input DTS path");
+            }
+            AnalyzeDtsXExss(argv[2]);
             return 0;
         }
 

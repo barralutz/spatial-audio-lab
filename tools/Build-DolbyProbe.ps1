@@ -19,6 +19,7 @@ $sources = @(
     'audio_platform.cpp',
     'capture_commands.cpp',
     'dolby_probe.cpp',
+    'dtsx_analysis.cpp',
     'media_foundation_probe.cpp',
     'mat_analysis.cpp',
     'mat_capture_client.cpp',

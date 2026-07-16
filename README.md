@@ -326,23 +326,40 @@ confirman que el transporte cambia con el objeto.
   '.\captures\dtsx-capture.wav'
 .\build\dolby-probe.exe extract-dtshd `
   '.\captures\dtsx-capture.wav' '.\captures\dtsx-capture.dts'
+.\build\dolby-probe.exe analyze-dtsx-exss `
+  '.\captures\dtsx-capture.dts'
 ```
+
+El EXSS no contiene core DTS, XBR, XLL ni LBR. Los 375 frames declaran una presentacion de 12
+canales, 48 kHz y 24 bits en el modo auxiliar 3, con codec auxiliar ID 1. El asset estandar solo
+ocupa cuatro bytes; el resto se divide exactamente, sin padding, en un paquete de configuracion
+privado `0x3A429B0A` de 36 bytes y un paquete lossless `0x759A1908` de 72 a 5.832 bytes. Los mismos
+sync words aparecen como constantes en `DtsxHdmiEnc.dll` y `DTSXDecoder.dll`: el encoder escribe
+ambos paquetes y el decoder los despacha a rutinas separadas. FFmpeg solo implementa los
+componentes DTS publicados y por eso no puede decodificar este codec auxiliar.
 
 La decodificacion analogica DTS:X aun no esta habilitada. DTS Sound Unbound instala el MFT
 `DTSXDecoder`, que anuncia salida PCM 7.1 y hasta 12 objetos float con metadata. El endpoint virtual
 acepta su formato de metadata `{2736CABA-57CE-43DC-9B5D-FB14BF7907AC}` y expone 32 objetos
 dinamicos. Sin embargo, el MFT consulta el AppService de licencia de DTS antes de aceptar cualquier
-tipo de entrada. Un MSIX local permite cargar correctamente el codec y sus VCLibs, pero Store lo
-identifica como paquete de desarrollo sin licencia y `SetInputType` devuelve
-`MF_E_INVALIDMEDIATYPE`. La consulta directa con el nombre interno `CDTSXDecoder` tambien devuelve
-`Status=ERROR`. Esto es una frontera de licencia/identidad, no un error del parser IEC.
+tipo de entrada. Una prueba de control genero DTS Core estandar, lo encapsulo en Matroska y Media
+Foundation lo identifico correctamente como `MFAudioFormat_DTS_HD`; el MFT rechazo incluso ese
+tipo nativo con `MF_E_INVALIDMEDIATYPE`. La consulta directa con `DTSXDecoder` y
+`CDTSXDecoder` devuelve `Status=ERROR`.
+
+El decoder no esta registrado como MFT Field-of-Use: aparece con y sin
+`MFT_ENUM_FLAG_FIELDOFUSE`, se activa sin invocar `IMFFieldOfUseMFTUnlock` y el callback registra
+cero llamadas. DTS documenta que **DTS:X Decoder** es una licencia o prueba separada dentro de
+Sound Unbound. Activar `DTS:X para centro de entretenimiento` habilita el encoder de juegos, pero
+no concede esa licencia de decodificacion de contenido. Esto es una frontera de licencia del codec,
+no un error del parser IEC ni algo que deba eludirse.
 
 `tools/Register-DolbyProbePackage.ps1` conserva este diagnostico reproducible: crea y firma el MSIX,
 registra el alias `dolby-probe-dtsx.exe` y solicita UAC una sola vez para confiar en el certificado
 local dentro de `LocalMachine\TrustedPeople`. No se debe distribuir ese certificado ni intentar
-eludir el servicio de licencia. FFmpeg reconoce el sync DTS-HD, pero no decodifica el substream
-DTS:X Profile 2 generado por el renderer de juegos; el parche de FFmpeg de marzo de 2025 citado al
-final de este documento corresponde a objetos Dolby TrueHD, no a DTS:X.
+eludir el servicio de licencia. El comando `probe-dtsx-field-of-use` descarta de forma reproducible
+esa ruta y `analyze-dtsx-exss` valida el transporte privado. El parche de FFmpeg de marzo de 2025
+citado al final de este documento corresponde a objetos Dolby TrueHD, no a DTS:X.
 
 Capturas de referencia:
 
@@ -399,6 +416,7 @@ Capturas de referencia:
 - `src/mat_capture_client.*`: cliente IOCTL del ring `\\.\DolbyDecoderMat`.
 - `src/media_foundation_probe.cpp`: enumeracion de MFTs, metadata espacial y diagnostico de licencia
   del decoder DTS:X.
+- `src/dtsx_analysis.cpp`: parser del EXSS auxiliar y de los paquetes privados del renderer DTS:X.
 - `src/mat_format.*`: operaciones comunes sobre transporte y metadata MAT.
 - `src/mat_analysis.cpp`: diagnosticos del carrier, posiciones de objetos y PCM multicanal.
 - `src/mat_pipeline.cpp`: decodificador MAT 7.1.2 compatible y ruta configurable en vivo.
@@ -662,3 +680,6 @@ frame anterior, se precargan 2.5 s y se reanuda.
 - [truehdd](https://github.com/truehdd/truehdd)
 - [dolby-atmos-encoder](https://github.com/raress96/dolby-atmos-encoder)
 - [Parche TrueHD de FFmpeg](https://ffmpeg.org/pipermail/ffmpeg-devel/2025-March/341429.html)
+- [DTS Sound Unbound FAQ](https://dts.com/dts-sound-unbound-faq/)
+- [ETSI TS 102 114, DTS Core y extensiones](https://www.etsi.org/deliver/etsi_ts/102100_102199/102114/01.06.01_60/ts_102114v010601p.pdf)
+- [Parser EXSS de FFmpeg](https://github.com/FFmpeg/FFmpeg/blob/master/libavcodec/dca_exss.c)

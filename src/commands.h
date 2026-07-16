@@ -22,6 +22,7 @@ void ListAudioDecoders(const std::wstring& filter, bool inspectTypes);
 void ProbeWinRtDecoder(const std::wstring& runtimeClass);
 void ProbeSpatialMetadata(const std::wstring& endpointFilter);
 void ProbeDtsXLicense(const std::wstring& codecName);
+void ProbeDtsXFieldOfUse();
 void ProbeDtsXDecode(const std::filesystem::path& inputPath, std::size_t maxBursts);
 void ProbeMediaTypes(const std::filesystem::path& inputPath);
 
@@ -29,6 +30,7 @@ void AnalyzeFloatWave(const std::filesystem::path& inputPath);
 void AnalyzeIec61937Wave(const std::filesystem::path& inputPath);
 void ExtractDtsHdWave(const std::filesystem::path& inputPath,
                       const std::filesystem::path& outputPath);
+void AnalyzeDtsXExss(const std::filesystem::path& inputPath);
 void AnalyzeMatWave(const std::filesystem::path& inputPath);
 void AnalyzeMatLayout(const std::filesystem::path& inputPath,
                       const std::filesystem::path& layoutPath);
