@@ -27,6 +27,7 @@ $sources = @(
     'mat_pipeline.cpp',
     'multi_endpoint_renderer.cpp',
     'speaker_layout.cpp',
+    'spatial_audio_sample.cpp',
     'wave_io.cpp'
 ) | ForEach-Object { '"..\src\' + $_ + '"' }
 

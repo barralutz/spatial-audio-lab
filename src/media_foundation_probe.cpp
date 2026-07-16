@@ -1,6 +1,10 @@
 #include "audio_platform.h"
 #include "commands.h"
+#include "mat_capture_client.h"
 #include "mat_format.h"
+#include "multi_endpoint_renderer.h"
+#include "speaker_layout.h"
+#include "spatial_audio_sample.h"
 #include "wave_io.h"
 
 #include <mfapi.h>
@@ -21,10 +25,14 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <iostream>
+#include <iomanip>
+#include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -35,6 +43,10 @@ namespace {
 inline constexpr GUID kDtsXEndpointMetadataFormat = {
     0x2736caba, 0x57ce, 0x43dc,
     {0x9b, 0x5d, 0xfb, 0x14, 0xbf, 0x79, 0x07, 0xac}};
+
+inline constexpr GUID kDtsXRawSubtype = {
+    0x64747378, 0x767a, 0x494d,
+    {0xb4, 0x78, 0xf2, 0x9d, 0x25, 0xdc, 0x90, 0x37}};
 
 class MediaFoundationSession {
 public:
@@ -400,6 +412,87 @@ void PrintSpatialSample(IMFSample* sample, const std::size_t sampleIndex) {
     }
 }
 
+double ReadPcmValue(const BYTE* data, const UINT32 bitsPerSample, const GUID& subtype) {
+    if (IsEqualGUID(subtype, MFAudioFormat_Float) && bitsPerSample == 32) {
+        float value = 0.0F;
+        std::memcpy(&value, data, sizeof(value));
+        return value;
+    }
+    if (bitsPerSample == 16) {
+        std::int16_t value = 0;
+        std::memcpy(&value, data, sizeof(value));
+        return static_cast<double>(value) / 32'768.0;
+    }
+    if (bitsPerSample == 24) {
+        std::int32_t value = static_cast<std::int32_t>(data[0]) |
+                             (static_cast<std::int32_t>(data[1]) << 8) |
+                             (static_cast<std::int32_t>(data[2]) << 16);
+        if ((value & 0x0080'0000) != 0) value |= static_cast<std::int32_t>(0xff00'0000);
+        return static_cast<double>(value) / 8'388'608.0;
+    }
+    if (bitsPerSample == 32) {
+        std::int32_t value = 0;
+        std::memcpy(&value, data, sizeof(value));
+        return static_cast<double>(value) / 2'147'483'648.0;
+    }
+    return 0.0;
+}
+
+void PrintPcmSample(IMFSample* sample, IMFMediaType* mediaType,
+                    const std::size_t sampleIndex, WaveWriter* writer) {
+    ComPtr<IMFMediaBuffer> buffer;
+    ThrowIfFailed(sample->ConvertToContiguousBuffer(&buffer),
+                  "Get contiguous DTS:X PCM output");
+
+    UINT32 channels = 0;
+    UINT32 bitsPerSample = 0;
+    UINT32 blockAlignment = 0;
+    GUID subtype{};
+    ThrowIfFailed(mediaType->GetUINT32(MF_MT_AUDIO_NUM_CHANNELS, &channels),
+                  "Get DTS:X PCM channel count");
+    ThrowIfFailed(mediaType->GetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, &bitsPerSample),
+                  "Get DTS:X PCM bit depth");
+    ThrowIfFailed(mediaType->GetUINT32(MF_MT_AUDIO_BLOCK_ALIGNMENT, &blockAlignment),
+                  "Get DTS:X PCM block alignment");
+    ThrowIfFailed(mediaType->GetGUID(MF_MT_SUBTYPE, &subtype),
+                  "Get DTS:X PCM subtype");
+
+    BYTE* raw = nullptr;
+    DWORD maximum = 0;
+    DWORD current = 0;
+    ThrowIfFailed(buffer->Lock(&raw, &maximum, &current), "Lock DTS:X PCM output");
+    const UINT32 bytesPerValue = bitsPerSample / 8;
+    const std::size_t frameCount = blockAlignment == 0 ? 0 : current / blockAlignment;
+    std::vector<long double> squareSums(channels, 0.0);
+    if (bytesPerValue != 0 && frameCount != 0) {
+        for (std::size_t frame = 0; frame < frameCount; ++frame) {
+            for (UINT32 channel = 0; channel < channels; ++channel) {
+                const BYTE* value = raw + frame * blockAlignment + channel * bytesPerValue;
+                const double normalized = ReadPcmValue(value, bitsPerSample, subtype);
+                squareSums[channel] +=
+                    static_cast<long double>(normalized) * normalized;
+            }
+        }
+    }
+    if (writer != nullptr && frameCount != 0) {
+        writer->Write(raw, static_cast<UINT32>(frameCount), false);
+    }
+    buffer->Unlock();
+
+    if (sampleIndex < 4) {
+        std::wcout << L"Output sample " << sampleIndex << L": " << frameCount
+                   << L" PCM frames, channel RMS=";
+        for (UINT32 channel = 0; channel < channels; ++channel) {
+            const double rms = frameCount == 0
+                ? 0.0
+                : std::sqrt(static_cast<double>(squareSums[channel] / frameCount));
+            if (channel != 0) std::wcout << L", ";
+            std::wcout << rms;
+        }
+        std::wcout << L"\n";
+    }
+}
+
 ComPtr<IMFMediaType> ConfigureDtsXInputType(IMFTransform* transform,
                                             IMFMediaType* advertisedType,
                                             const UINT32 measuredAverageBytes) {
@@ -420,7 +513,7 @@ ComPtr<IMFMediaType> ConfigureDtsXInputType(IMFTransform* transform,
     const std::array<UINT32, 4> averageRates = {
         measuredAverageBytes, 96'058, 196'933, 768'000};
     for (const GUID& subtype : exactSubtypes) {
-        for (const UINT32 channels : {6U, 8U, 12U}) {
+        for (const UINT32 channels : {12U, 8U, 6U}) {
             for (const UINT32 averageBytes : averageRates) {
                 ComPtr<IMFMediaType> candidate;
                 ThrowIfFailed(MFCreateMediaType(&candidate),
@@ -658,6 +751,340 @@ void PrintInspectableClass(IInspectable* inspectable) {
     WindowsDeleteString(runtimeClass);
 }
 
+class DtsXCarrierFramer {
+public:
+    std::vector<std::vector<BYTE>> Push(const BYTE* data, const std::size_t bytes) {
+        buffer_.insert(buffer_.end(), data, data + bytes);
+        std::vector<std::vector<BYTE>> frames;
+        std::size_t offset = 0;
+        std::uint64_t skippedBytes = 0;
+        while (offset + 8 <= buffer_.size()) {
+            const bool little = buffer_[offset] == 0x72 && buffer_[offset + 1] == 0xf8 &&
+                                buffer_[offset + 2] == 0x1f && buffer_[offset + 3] == 0x4e;
+            const bool swapped = buffer_[offset] == 0xf8 && buffer_[offset + 1] == 0x72 &&
+                                 buffer_[offset + 2] == 0x4e && buffer_[offset + 3] == 0x1f;
+            if (!little && !swapped) {
+                ++skippedBytes;
+                ++offset;
+                continue;
+            }
+            const auto readWord = [&](const std::size_t wordOffset) {
+                return swapped
+                    ? static_cast<std::uint16_t>((buffer_[wordOffset] << 8) |
+                                                 buffer_[wordOffset + 1])
+                    : ReadLittleUint16(buffer_.data() + wordOffset);
+            };
+            const std::uint16_t dataType = readWord(offset + 4);
+            const std::size_t payloadBytes = readWord(offset + 6);
+            if ((dataType & 0x1fU) != 0x11 || payloadBytes < 12) {
+                ++malformedBursts_;
+                ++skippedBytes;
+                ++offset;
+                continue;
+            }
+            if (offset + 8 + payloadBytes > buffer_.size()) break;
+
+            const auto logical = UnswapMatTransportWords(
+                buffer_.data() + offset + 8, payloadBytes);
+            constexpr std::array<BYTE, 10> wrapper = {
+                0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfe, 0xfe};
+            if (!std::equal(wrapper.begin(), wrapper.end(), logical.begin())) {
+                ++malformedBursts_;
+                skippedBytes += 8 + payloadBytes;
+                offset += 8 + payloadBytes;
+                continue;
+            }
+            const std::size_t frameBytes =
+                (static_cast<std::size_t>(logical[10]) << 8) | logical[11];
+            if (frameBytes == 0 || frameBytes + 12 > logical.size()) {
+                ++malformedBursts_;
+                skippedBytes += 8 + payloadBytes;
+                offset += 8 + payloadBytes;
+                continue;
+            }
+            frames.emplace_back(logical.begin() + 12,
+                                logical.begin() + 12 + frameBytes);
+            ++bursts_;
+            offset += 8 + payloadBytes;
+        }
+        skippedBytes_ += skippedBytes;
+        buffer_.erase(buffer_.begin(), buffer_.begin() + offset);
+        return frames;
+    }
+
+    void Reset() { buffer_.clear(); }
+    std::uint64_t Bursts() const { return bursts_; }
+    std::uint64_t MalformedBursts() const { return malformedBursts_; }
+    std::uint64_t SkippedBytes() const { return skippedBytes_; }
+    std::size_t BufferedBytes() const { return buffer_.size(); }
+
+private:
+    std::vector<BYTE> buffer_;
+    std::uint64_t bursts_{};
+    std::uint64_t malformedBursts_{};
+    std::uint64_t skippedBytes_{};
+};
+
+struct DtsXSpatialDecodeStats {
+    std::uint64_t inputFrames{};
+    std::uint64_t outputSamples{};
+    std::uint64_t pcmFrames{};
+    std::uint64_t clippedSamples{};
+    std::uint64_t unmappedObjects{};
+};
+
+class DtsXSpatialDecoder {
+public:
+    explicit DtsXSpatialDecoder(const SpeakerLayout& layout) : layout_(layout) {
+        decoder_ = ActivateAudioDecoder(
+            L"DTSXDecoder", &kDtsXRawSubtype, &MFAudioFormat_Float_SpatialObjects);
+        const Endpoint endpoint = SelectEndpoint(L"SinkDescription Sample");
+
+        PROPVARIANT metadataActivation;
+        PropVariantInit(&metadataActivation);
+        metadataActivation.vt = VT_CLSID;
+        metadataActivation.puuid = const_cast<GUID*>(&kDtsXEndpointMetadataFormat);
+        ThrowIfFailed(endpoint.device->Activate(__uuidof(ISpatialAudioMetadataClient), CLSCTX_ALL,
+                                                &metadataActivation, &metadataClient_),
+                      "Activate live DTS:X metadata client");
+
+        ComPtr<IMFAttributes> attributes;
+        ThrowIfFailed(decoder_.transform->GetAttributes(&attributes),
+                      "Get live DTS:X transform attributes");
+        ThrowIfFailed(attributes->SetString(MFT_AUDIO_DECODER_AUDIO_ENDPOINT_ID,
+                                            endpoint.id.c_str()),
+                      "Set live DTS:X endpoint ID");
+        ThrowIfFailed(attributes->SetUnknown(MFT_AUDIO_DECODER_SPATIAL_METADATA_CLIENT,
+                                             metadataClient_.Get()),
+                      "Set live DTS:X metadata client");
+
+        ComPtr<IMFMediaType> advertisedInput;
+        ThrowIfFailed(decoder_.transform->GetInputAvailableType(0, 0, &advertisedInput),
+                      "Get live DTS:X input type");
+        outputType_ = FindOutputType();
+        ThrowIfFailed(decoder_.transform->SetOutputType(0, outputType_.Get(), 0),
+                      "Set live DTS:X spatial output type");
+        const ComPtr<IMFMediaType> inputType = ConfigureDtsXInputType(
+            decoder_.transform.Get(), advertisedInput.Get(), 196'933);
+        if (!inputType) throw std::runtime_error("No live DTS:X input profile was accepted");
+        ThrowIfFailed(decoder_.transform->SetInputType(0, inputType.Get(), 0),
+                      "Set live DTS:X input type");
+        ThrowIfFailed(decoder_.transform->GetOutputStreamInfo(0, &outputInfo_),
+                      "Get live DTS:X output stream information");
+        if ((outputInfo_.dwFlags & (MFT_OUTPUT_STREAM_PROVIDES_SAMPLES |
+                                    MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES)) != 0) {
+            throw std::runtime_error("Unexpected DTS:X sample allocation mode");
+        }
+        ThrowIfFailed(outputType_->GetUINT32(MF_MT_SPATIAL_AUDIO_MAX_DYNAMIC_OBJECTS,
+                                             &objectCount_),
+                      "Get live DTS:X object count");
+        ThrowIfFailed(outputType_->GetUINT32(MF_MT_SPATIAL_AUDIO_MAX_METADATA_ITEMS,
+                                             &maxMetadataItems_),
+                      "Get live DTS:X metadata item count");
+
+        decoder_.transform->ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0);
+        ThrowIfFailed(decoder_.transform->ProcessMessage(
+                          MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0),
+                      "Begin live DTS:X streaming");
+        ThrowIfFailed(decoder_.transform->ProcessMessage(
+                          MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0),
+                      "Start live DTS:X stream");
+        streaming_ = true;
+    }
+
+    ~DtsXSpatialDecoder() {
+        if (streaming_) {
+            decoder_.transform->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0);
+        }
+    }
+
+    DtsXSpatialDecoder(const DtsXSpatialDecoder&) = delete;
+    DtsXSpatialDecoder& operator=(const DtsXSpatialDecoder&) = delete;
+
+    std::vector<std::int16_t> Push(const std::vector<BYTE>& frame) {
+        ComPtr<IMFSample> sample;
+        ComPtr<IMFMediaBuffer> buffer;
+        ThrowIfFailed(MFCreateSample(&sample), "Create live DTS:X input sample");
+        ThrowIfFailed(MFCreateMemoryBuffer(static_cast<DWORD>(frame.size()), &buffer),
+                      "Create live DTS:X input buffer");
+        BYTE* destination = nullptr;
+        DWORD maximum = 0;
+        ThrowIfFailed(buffer->Lock(&destination, &maximum, nullptr),
+                      "Lock live DTS:X input buffer");
+        std::memcpy(destination, frame.data(), frame.size());
+        buffer->Unlock();
+        ThrowIfFailed(buffer->SetCurrentLength(static_cast<DWORD>(frame.size())),
+                      "Set live DTS:X input length");
+        ThrowIfFailed(sample->AddBuffer(buffer.Get()), "Attach live DTS:X input buffer");
+        ThrowIfFailed(sample->SetSampleTime(sampleTime_), "Set live DTS:X sample time");
+        ThrowIfFailed(sample->SetSampleDuration(kFrameDuration),
+                      "Set live DTS:X sample duration");
+        if (discontinuity_) {
+            sample->SetUINT32(MFSampleExtension_Discontinuity, TRUE);
+            discontinuity_ = false;
+        }
+        sampleTime_ += kFrameDuration;
+
+        std::vector<std::int16_t> output;
+        HRESULT result = decoder_.transform->ProcessInput(0, sample.Get(), 0);
+        if (result == MF_E_NOTACCEPTING) {
+            output = Pull();
+            result = decoder_.transform->ProcessInput(0, sample.Get(), 0);
+        }
+        ThrowIfFailed(result, "Submit live DTS:X frame");
+        ++stats_.inputFrames;
+        auto more = Pull();
+        output.insert(output.end(), more.begin(), more.end());
+        return output;
+    }
+
+    std::vector<std::int16_t> Drain() {
+        ThrowIfFailed(decoder_.transform->ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0),
+                      "End live DTS:X stream");
+        ThrowIfFailed(decoder_.transform->ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0),
+                      "Drain live DTS:X decoder");
+        auto output = Pull();
+        decoder_.transform->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0);
+        streaming_ = false;
+        return output;
+    }
+
+    void Reset() {
+        decoder_.transform->ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0);
+        decoder_.transform->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0);
+        sampleTime_ = 0;
+        discontinuity_ = true;
+    }
+
+    const DtsXSpatialDecodeStats& Stats() const { return stats_; }
+
+private:
+    static constexpr LONGLONG kFrameDuration = (10'000'000LL * 512) / 48'000;
+
+    ComPtr<IMFMediaType> FindOutputType() {
+        for (DWORD index = 0;; ++index) {
+            ComPtr<IMFMediaType> candidate;
+            const HRESULT result = decoder_.transform->GetOutputAvailableType(0, index,
+                                                                               &candidate);
+            if (result == MF_E_NO_MORE_TYPES) break;
+            ThrowIfFailed(result, "Enumerate live DTS:X output types");
+            GUID subtype{};
+            GUID metadataFormat{};
+            if (SUCCEEDED(candidate->GetGUID(MF_MT_SUBTYPE, &subtype)) &&
+                IsEqualGUID(subtype, MFAudioFormat_Float_SpatialObjects) &&
+                SUCCEEDED(candidate->GetGUID(MF_MT_SPATIAL_AUDIO_OBJECT_METADATA_FORMAT_ID,
+                                             &metadataFormat)) &&
+                IsEqualGUID(metadataFormat, kDtsXEndpointMetadataFormat)) {
+                return candidate;
+            }
+        }
+        throw std::runtime_error("DTS:X endpoint metadata output was not found");
+    }
+
+    std::vector<std::int16_t> Pull() {
+        std::vector<std::int16_t> resultSamples;
+        while (true) {
+            ComPtr<IMFSpatialAudioSample> spatialSample;
+            ThrowIfFailed(CreateSpatialAudioSample(&spatialSample),
+                          "Create live DTS:X spatial sample");
+            ThrowIfFailed(AddSpatialAudioObjectBuffers(
+                              spatialSample.Get(), metadataClient_.Get(), objectCount_, 512,
+                              maxMetadataItems_),
+                          "Allocate live DTS:X spatial buffers");
+            ComPtr<IMFSample> sample;
+            ThrowIfFailed(spatialSample.As(&sample), "Query live DTS:X output sample");
+
+            MFT_OUTPUT_DATA_BUFFER output{};
+            output.dwStreamID = 0;
+            output.pSample = sample.Get();
+            DWORD status = 0;
+            const HRESULT result = decoder_.transform->ProcessOutput(0, 1, &output, &status);
+            if (output.pEvents != nullptr) output.pEvents->Release();
+            if (result == MF_E_TRANSFORM_NEED_MORE_INPUT) break;
+            if (result == MF_E_TRANSFORM_STREAM_CHANGE) {
+                throw std::runtime_error("Live DTS:X decoder changed output format");
+            }
+            ThrowIfFailed(result, "Decode live DTS:X output");
+            auto interleaved = ConvertSample(spatialSample.Get());
+            resultSamples.insert(resultSamples.end(), interleaved.begin(), interleaved.end());
+            ++stats_.outputSamples;
+        }
+        return resultSamples;
+    }
+
+    std::vector<std::int16_t> ConvertSample(IMFSpatialAudioSample* sample) {
+        DWORD objectCount = 0;
+        ThrowIfFailed(sample->GetObjectCount(&objectCount),
+                      "Get live DTS:X spatial object count");
+        struct ObjectView {
+            ComPtr<IMFSpatialAudioObjectBuffer> buffer;
+            std::optional<std::size_t> speaker;
+            DWORD bytes{};
+        };
+        std::vector<ObjectView> objects;
+        objects.reserve(objectCount);
+        std::size_t frameCount = 0;
+        for (DWORD index = 0; index < objectCount; ++index) {
+            ObjectView view;
+            ThrowIfFailed(sample->GetSpatialAudioObjectByIndex(index, &view.buffer),
+                          "Get live DTS:X spatial object");
+            AudioObjectType type = AudioObjectType_None;
+            UINT32 id = 0xffff'ffff;
+            view.buffer->GetID(&id);
+            view.buffer->GetType(&type);
+            view.buffer->GetCurrentLength(&view.bytes);
+            if (id != 0xffff'ffff && type != AudioObjectType_None) {
+                view.speaker = layout_.FindSpeaker(AudioObjectTypeName(type));
+                if (!view.speaker.has_value()) ++stats_.unmappedObjects;
+            }
+            if (view.bytes % sizeof(float) != 0) {
+                throw std::runtime_error("DTS:X object has an incomplete float sample");
+            }
+            frameCount = std::max(frameCount,
+                                  static_cast<std::size_t>(view.bytes / sizeof(float)));
+            objects.push_back(std::move(view));
+        }
+
+        std::vector<double> mixed(frameCount * layout_.speakers.size());
+        for (ObjectView& object : objects) {
+            if (!object.speaker.has_value() || object.bytes == 0) continue;
+            BYTE* raw = nullptr;
+            DWORD maximum = 0;
+            DWORD current = 0;
+            ThrowIfFailed(object.buffer->Lock(&raw, &maximum, &current),
+                          "Lock live DTS:X spatial object");
+            const auto* values = reinterpret_cast<const float*>(raw);
+            const std::size_t valuesCount = current / sizeof(float);
+            for (std::size_t frame = 0; frame < valuesCount; ++frame) {
+                const double value = std::isfinite(values[frame]) ? values[frame] : 0.0;
+                mixed[frame * layout_.speakers.size() + *object.speaker] += value;
+            }
+            object.buffer->Unlock();
+        }
+
+        std::vector<std::int16_t> interleaved(mixed.size());
+        for (std::size_t index = 0; index < mixed.size(); ++index) {
+            if (mixed[index] < -1.0 || mixed[index] > 1.0) ++stats_.clippedSamples;
+            const double value = std::clamp(mixed[index], -1.0, 1.0);
+            interleaved[index] = static_cast<std::int16_t>(std::lround(value * 32'767.0));
+        }
+        stats_.pcmFrames += frameCount;
+        return interleaved;
+    }
+
+    const SpeakerLayout& layout_;
+    ActivatedDecoder decoder_;
+    ComPtr<ISpatialAudioMetadataClient> metadataClient_;
+    ComPtr<IMFMediaType> outputType_;
+    MFT_OUTPUT_STREAM_INFO outputInfo_{};
+    UINT32 objectCount_{};
+    UINT32 maxMetadataItems_{};
+    LONGLONG sampleTime_{};
+    DtsXSpatialDecodeStats stats_;
+    bool discontinuity_{true};
+    bool streaming_{};
+};
+
 } // namespace
 
 void ListAudioDecoders(const std::wstring& filter, const bool inspectTypes) {
@@ -879,37 +1306,42 @@ void ProbeDtsXFieldOfUse() {
     if (SUCCEEDED(activationResult)) activation->ShutdownObject();
 }
 
-void ProbeDtsXDecode(const std::filesystem::path& inputPath, const std::size_t maxBursts) {
+void ProbeDtsXDecode(const std::filesystem::path& inputPath, const std::size_t maxBursts,
+                     const DtsXDecodeOutput outputMode,
+                     const std::filesystem::path& outputPath) {
     MediaFoundationSession mediaFoundation;
     const auto frames = LoadDtsXFrames(inputPath, maxBursts);
     std::size_t totalFrameBytes = 0;
     for (const auto& frame : frames) totalFrameBytes += frame.size();
     const UINT32 measuredAverageBytes = static_cast<UINT32>(
         (totalFrameBytes * 48'000ULL) / (frames.size() * 512ULL));
-    static constexpr GUID kDtsXRawSubtype = {
-        0x64747378, 0x767a, 0x494d,
-        {0xb4, 0x78, 0xf2, 0x9d, 0x25, 0xdc, 0x90, 0x37}};
-    auto decoder = ActivateAudioDecoder(
-        L"DTSXDecoder", &kDtsXRawSubtype, &MFAudioFormat_Float_SpatialObjects);
+    const GUID* requestedOutput = outputMode == DtsXDecodeOutput::SpatialObjects
+        ? &MFAudioFormat_Float_SpatialObjects
+        : &MFAudioFormat_PCM;
+    auto decoder = ActivateAudioDecoder(L"DTSXDecoder", &kDtsXRawSubtype, requestedOutput);
 
     const Endpoint endpoint = SelectEndpoint(L"SinkDescription Sample");
-    PROPVARIANT metadataActivation;
-    PropVariantInit(&metadataActivation);
-    metadataActivation.vt = VT_CLSID;
-    metadataActivation.puuid = const_cast<GUID*>(&kDtsXEndpointMetadataFormat);
     ComPtr<ISpatialAudioMetadataClient> metadataClient;
-    ThrowIfFailed(endpoint.device->Activate(__uuidof(ISpatialAudioMetadataClient), CLSCTX_ALL,
-                                            &metadataActivation, &metadataClient),
-                  "Activate spatial audio metadata client");
+    if (outputMode == DtsXDecodeOutput::SpatialObjects) {
+        PROPVARIANT metadataActivation;
+        PropVariantInit(&metadataActivation);
+        metadataActivation.vt = VT_CLSID;
+        metadataActivation.puuid = const_cast<GUID*>(&kDtsXEndpointMetadataFormat);
+        ThrowIfFailed(endpoint.device->Activate(__uuidof(ISpatialAudioMetadataClient), CLSCTX_ALL,
+                                                &metadataActivation, &metadataClient),
+                      "Activate spatial audio metadata client");
+    }
 
     ComPtr<IMFAttributes> transformAttributes;
     if (SUCCEEDED(decoder.transform->GetAttributes(&transformAttributes))) {
         ThrowIfFailed(transformAttributes->SetString(MFT_AUDIO_DECODER_AUDIO_ENDPOINT_ID,
                                                       endpoint.id.c_str()),
                       "Set DTS:X decoder endpoint ID");
-        ThrowIfFailed(transformAttributes->SetUnknown(MFT_AUDIO_DECODER_SPATIAL_METADATA_CLIENT,
-                                                       metadataClient.Get()),
-                      "Set DTS:X spatial metadata client");
+        if (metadataClient) {
+            ThrowIfFailed(transformAttributes->SetUnknown(
+                              MFT_AUDIO_DECODER_SPATIAL_METADATA_CLIENT, metadataClient.Get()),
+                          "Set DTS:X spatial metadata client");
+        }
         std::wcout << L"DTS:X transform attributes:\n";
         PrintAttributes(transformAttributes.Get());
     }
@@ -938,61 +1370,43 @@ void ProbeDtsXDecode(const std::filesystem::path& inputPath, const std::size_t m
         if (result == MF_E_NO_MORE_TYPES) break;
         ThrowIfFailed(result, "Enumerate DTS:X decoder output types");
         GUID subtype{};
-        GUID metadataFormat{};
-        if (SUCCEEDED(candidate->GetGUID(MF_MT_SUBTYPE, &subtype)) &&
-            IsEqualGUID(subtype, MFAudioFormat_Float_SpatialObjects) &&
-            SUCCEEDED(candidate->GetGUID(MF_MT_SPATIAL_AUDIO_OBJECT_METADATA_FORMAT_ID,
-                                         &metadataFormat)) &&
-            IsEqualGUID(metadataFormat, kDtsXEndpointMetadataFormat)) {
-            outputType = candidate;
-            break;
-        }
-    }
-    if (!outputType) {
-        throw std::runtime_error("DTS:X decoder did not expose the endpoint metadata format");
-    }
-    ThrowIfFailed(decoder.transform->SetOutputType(0, outputType.Get(), 0),
-                  "Set DTS:X spatial object output type");
-    inputType = ConfigureDtsXInputType(decoder.transform.Get(), advertisedInputType.Get(),
-                                       measuredAverageBytes);
-    bool spatialOutput = true;
-    if (!inputType) {
-        ComPtr<IMFMediaType> pcmOutput;
-        for (DWORD index = 0;; ++index) {
-            ComPtr<IMFMediaType> candidate;
-            const HRESULT result = decoder.transform->GetOutputAvailableType(0, index, &candidate);
-            if (result == MF_E_NO_MORE_TYPES) break;
-            ThrowIfFailed(result, "Enumerate DTS:X PCM output types");
-            GUID subtype{};
+        if (FAILED(candidate->GetGUID(MF_MT_SUBTYPE, &subtype))) continue;
+        if (outputMode == DtsXDecodeOutput::SpatialObjects) {
+            GUID metadataFormat{};
+            if (IsEqualGUID(subtype, MFAudioFormat_Float_SpatialObjects) &&
+                SUCCEEDED(candidate->GetGUID(MF_MT_SPATIAL_AUDIO_OBJECT_METADATA_FORMAT_ID,
+                                             &metadataFormat)) &&
+                IsEqualGUID(metadataFormat, kDtsXEndpointMetadataFormat)) {
+                outputType = candidate;
+                break;
+            }
+        } else {
             UINT32 channels = 0;
-            if (SUCCEEDED(candidate->GetGUID(MF_MT_SUBTYPE, &subtype)) &&
-                IsEqualGUID(subtype, MFAudioFormat_PCM) &&
+            if ((IsEqualGUID(subtype, MFAudioFormat_PCM) ||
+                 IsEqualGUID(subtype, MFAudioFormat_Float)) &&
                 SUCCEEDED(candidate->GetUINT32(MF_MT_AUDIO_NUM_CHANNELS, &channels)) &&
                 channels == 8) {
-                pcmOutput = candidate;
+                outputType = candidate;
                 break;
             }
         }
-        if (pcmOutput) {
-            ThrowIfFailed(decoder.transform->SetOutputType(0, pcmOutput.Get(), 0),
-                          "Set DTS:X PCM comparison output type");
-            inputType = ConfigureDtsXInputType(decoder.transform.Get(),
-                                               advertisedInputType.Get(), measuredAverageBytes);
-            if (inputType) {
-                outputType = pcmOutput;
-                spatialOutput = false;
-            }
-        }
     }
+    if (!outputType) {
+        throw std::runtime_error(outputMode == DtsXDecodeOutput::SpatialObjects
+                                     ? "DTS:X decoder did not expose the endpoint metadata format"
+                                     : "DTS:X decoder did not expose 7.1 PCM output");
+    }
+    ThrowIfFailed(decoder.transform->SetOutputType(0, outputType.Get(), 0),
+                  outputMode == DtsXDecodeOutput::SpatialObjects
+                      ? "Set DTS:X spatial object output type"
+                      : "Set DTS:X 7.1 PCM output type");
+    inputType = ConfigureDtsXInputType(decoder.transform.Get(), advertisedInputType.Get(),
+                                       measuredAverageBytes);
     if (!inputType) {
         throw std::runtime_error("No tested DTS:X input media profile was accepted");
     }
     ThrowIfFailed(decoder.transform->SetInputType(0, inputType.Get(), 0),
                   "Set DTS:X decoder input type");
-    if (!spatialOutput) {
-        std::wcout << L"The input was accepted only after selecting PCM 7.1 output.\n";
-        throw std::runtime_error("DTS:X spatial-object negotiation is still incomplete");
-    }
 
     MFT_OUTPUT_STREAM_INFO outputInfo{};
     ThrowIfFailed(decoder.transform->GetOutputStreamInfo(0, &outputInfo),
@@ -1004,10 +1418,36 @@ void ProbeDtsXDecode(const std::filesystem::path& inputPath, const std::size_t m
                << L", cbSize=" << outputInfo.cbSize
                << L", alignment=" << outputInfo.cbAlignment << L"\n";
 
-    if ((outputInfo.dwFlags & (MFT_OUTPUT_STREAM_PROVIDES_SAMPLES |
-                               MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES)) == 0) {
-        throw std::runtime_error(
-            "DTS:X spatial output requires a caller-created IMFSpatialAudioSample");
+    std::unique_ptr<WaveWriter> pcmWriter;
+    if (outputMode == DtsXDecodeOutput::Pcm71 && !outputPath.empty()) {
+        WAVEFORMATEX* waveFormat = nullptr;
+        UINT32 waveFormatBytes = 0;
+        ThrowIfFailed(MFCreateWaveFormatExFromMFMediaType(
+                          outputType.Get(), &waveFormat, &waveFormatBytes,
+                          MFWaveFormatExConvertFlag_Normal),
+                      "Create DTS:X PCM WAV format");
+        try {
+            pcmWriter = std::make_unique<WaveWriter>(outputPath, waveFormat);
+        } catch (...) {
+            CoTaskMemFree(waveFormat);
+            throw;
+        }
+        CoTaskMemFree(waveFormat);
+        std::wcout << L"PCM output WAV: " << outputPath.wstring() << L"\n";
+    }
+
+    const bool callerProvidesSamples =
+        (outputInfo.dwFlags & (MFT_OUTPUT_STREAM_PROVIDES_SAMPLES |
+                               MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES)) == 0;
+    UINT32 spatialObjectCount = 0;
+    UINT32 maxMetadataItems = 0;
+    if (outputMode == DtsXDecodeOutput::SpatialObjects) {
+        ThrowIfFailed(outputType->GetUINT32(MF_MT_SPATIAL_AUDIO_MAX_DYNAMIC_OBJECTS,
+                                            &spatialObjectCount),
+                      "Get DTS:X maximum spatial object count");
+        ThrowIfFailed(outputType->GetUINT32(MF_MT_SPATIAL_AUDIO_MAX_METADATA_ITEMS,
+                                            &maxMetadataItems),
+                      "Get DTS:X maximum metadata item count");
     }
 
     decoder.transform->ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0);
@@ -1019,20 +1459,54 @@ void ProbeDtsXDecode(const std::filesystem::path& inputPath, const std::size_t m
     std::size_t outputSamples = 0;
     const auto pullOutput = [&]() {
         while (true) {
+            ComPtr<IMFSample> callerSample;
+            if (callerProvidesSamples) {
+                if (outputMode == DtsXDecodeOutput::SpatialObjects) {
+                    ComPtr<IMFSpatialAudioSample> spatialSample;
+                    ThrowIfFailed(CreateSpatialAudioSample(&spatialSample),
+                                  "Create DTS:X spatial output sample");
+                    ThrowIfFailed(spatialSample.As(&callerSample),
+                                  "Query DTS:X spatial sample as IMFSample");
+                    ThrowIfFailed(AddSpatialAudioObjectBuffers(
+                                      spatialSample.Get(), metadataClient.Get(),
+                                      spatialObjectCount, 512, maxMetadataItems),
+                                  "Allocate DTS:X spatial object buffers");
+                } else {
+                    ThrowIfFailed(MFCreateSample(&callerSample),
+                                  "Create DTS:X PCM output sample");
+                    if (outputInfo.cbSize != 0) {
+                        ComPtr<IMFMediaBuffer> outputBuffer;
+                        ThrowIfFailed(MFCreateMemoryBuffer(outputInfo.cbSize, &outputBuffer),
+                                      "Create DTS:X output buffer");
+                        ThrowIfFailed(callerSample->AddBuffer(outputBuffer.Get()),
+                                      "Attach DTS:X output buffer");
+                    }
+                }
+            }
+
             MFT_OUTPUT_DATA_BUFFER output{};
             output.dwStreamID = 0;
+            output.pSample = callerSample.Get();
             DWORD status = 0;
             const HRESULT result = decoder.transform->ProcessOutput(0, 1, &output, &status);
             if (output.pEvents != nullptr) output.pEvents->Release();
             ComPtr<IMFSample> sample;
-            if (output.pSample != nullptr) sample.Attach(output.pSample);
+            if (callerSample) {
+                sample = callerSample;
+            } else if (output.pSample != nullptr) {
+                sample.Attach(output.pSample);
+            }
             if (result == MF_E_TRANSFORM_NEED_MORE_INPUT) return;
             if (result == MF_E_TRANSFORM_STREAM_CHANGE) {
                 throw std::runtime_error("DTS:X decoder changed its output stream format");
             }
             ThrowIfFailed(result, "Decode DTS:X output");
             if (!sample) throw std::runtime_error("DTS:X decoder returned an empty output sample");
-            if (outputSamples < 4) PrintSpatialSample(sample.Get(), outputSamples);
+            if (outputMode == DtsXDecodeOutput::SpatialObjects) {
+                if (outputSamples < 4) PrintSpatialSample(sample.Get(), outputSamples);
+            } else {
+                PrintPcmSample(sample.Get(), outputType.Get(), outputSamples, pcmWriter.get());
+            }
             ++outputSamples;
         }
     };
@@ -1071,7 +1545,135 @@ void ProbeDtsXDecode(const std::filesystem::path& inputPath, const std::size_t m
                   "Drain DTS:X decoder");
     pullOutput();
     decoder.transform->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0);
-    std::wcout << L"Decoded spatial samples: " << outputSamples << L"\n";
+    if (pcmWriter) pcmWriter->Finalize();
+    std::wcout << (outputMode == DtsXDecodeOutput::SpatialObjects
+                       ? L"Decoded spatial samples: "
+                       : L"Decoded PCM samples: ")
+               << outputSamples << L"\n";
+}
+
+void PlayLiveDtsXLayout(const double seconds,
+                        const std::filesystem::path& layoutPath,
+                        const double gain,
+                        const DWORD prebufferMilliseconds) {
+    MediaFoundationSession mediaFoundation;
+    const SpeakerLayout layout = LoadSpeakerLayout(layoutPath);
+    WinHandle device = OpenMatCaptureDevice();
+    MultiEndpointRenderer renderer(layout, gain);
+    DtsXSpatialDecoder decoder(layout);
+    ResetMatCapture(device.Get());
+    DtsXCarrierFramer framer;
+    InterleavedPcmQueue queue(layout.speakers.size());
+
+    constexpr std::size_t requestPayloadBytes = 256U * 1024U;
+    std::vector<BYTE> request(sizeof(MAT_CAPTURE_READ_HEADER) + requestPayloadBytes);
+    const std::uint64_t prebufferFrames =
+        std::max<std::uint64_t>(960, static_cast<std::uint64_t>(prebufferMilliseconds) * 48);
+    std::uint64_t expectedSequence = 0;
+    std::uint64_t sequenceGaps = 0;
+    std::uint64_t ringBytes = 0;
+    std::uint64_t maximumQueuedFrames = 0;
+    bool haveSequence = false;
+    bool acceptingInput = true;
+    bool decoderDrained = false;
+
+    std::wcout << L"Live DTS:X configurable layout: " << layout.name << L"\n"
+               << L"  speakers=" << layout.speakers.size()
+               << L", outputs=" << layout.outputs.size() << L"\n";
+    for (const EndpointRenderStats& output : renderer.Stats()) {
+        std::wcout << L"  " << output.routeName << L": " << output.endpointName
+                   << (output.isMaster ? L" [master]" : L"") << L"\n";
+    }
+    std::wcout << L"  decoder=DTSXDecoder spatial 7.1.4, gain=" << std::fixed
+               << std::setprecision(2) << gain << L", prebuffer="
+               << prebufferMilliseconds << L" ms\n" << std::flush;
+
+    const auto startTime = std::chrono::steady_clock::now();
+    const auto deadline = startTime + std::chrono::duration<double>(seconds);
+    auto lastPayloadTime = startTime;
+    try {
+        while (true) {
+            const auto now = std::chrono::steady_clock::now();
+            if (acceptingInput) {
+                const MatCaptureReadView read = ReadMatCapture(device.Get(), request);
+                if (read.header.PayloadBytes != 0) {
+                    if (!IsEqualGUID(read.header.SubFormat, kDtsXE1)) {
+                        throw std::runtime_error(
+                            "Live DTS:X requires the SinkDescription DTS:X E1 format");
+                    }
+                    if (read.header.FormatChanges != 0) {
+                        throw std::runtime_error("IEC 61937 format changed during DTS:X playback");
+                    }
+                    if (haveSequence && read.header.FirstByteSequence != expectedSequence) {
+                        sequenceGaps += read.header.FirstByteSequence > expectedSequence
+                            ? read.header.FirstByteSequence - expectedSequence
+                            : expectedSequence - read.header.FirstByteSequence;
+                        framer.Reset();
+                        decoder.Reset();
+                    }
+                    haveSequence = true;
+                    expectedSequence = read.header.FirstByteSequence + read.header.PayloadBytes;
+                    ringBytes += read.header.PayloadBytes;
+                    lastPayloadTime = now;
+
+                    auto frames = framer.Push(read.payload, read.header.PayloadBytes);
+                    for (const auto& frame : frames) {
+                        auto pcm = decoder.Push(frame);
+                        if (!pcm.empty()) queue.Append(std::move(pcm));
+                    }
+                    maximumQueuedFrames = std::max(
+                        maximumQueuedFrames, renderer.MinimumFramesAvailable(queue));
+                }
+                if (now >= deadline) acceptingInput = false;
+            }
+
+            if (!acceptingInput && !decoderDrained) {
+                auto pcm = decoder.Drain();
+                if (!pcm.empty()) queue.Append(std::move(pcm));
+                decoderDrained = true;
+            }
+
+            const std::uint64_t queuedForAll = renderer.MinimumFramesAvailable(queue);
+            if (!renderer.IsStarted() &&
+                (queuedForAll >= prebufferFrames || (decoderDrained && queuedForAll != 0))) {
+                renderer.Prime(queue);
+                renderer.Start();
+            }
+
+            if (renderer.IsStarted()) {
+                const bool activeCarrier = acceptingInput &&
+                    now - lastPayloadTime < std::chrono::milliseconds(40);
+                renderer.Service(queue, activeCarrier, 2);
+                renderer.DiscardConsumed(queue);
+            } else {
+                Sleep(2);
+            }
+
+            if (decoderDrained && (!renderer.IsStarted() || renderer.IsDrained(queue))) break;
+        }
+    } catch (...) {
+        renderer.Stop();
+        throw;
+    }
+
+    if (!renderer.IsStarted()) {
+        throw std::runtime_error("No complete DTS:X E1 bursts arrived before the live timeout");
+    }
+    renderer.Stop();
+    const MAT_CAPTURE_STATS ringStats = QueryMatCaptureStats(device.Get());
+    const DtsXSpatialDecodeStats& decodeStats = decoder.Stats();
+    std::wcout << L"Live DTS:X layout playback complete\n"
+               << L"  ring bytes=" << ringBytes << L", driver dropped="
+               << ringStats.DroppedBytes << L", sequence gaps=" << sequenceGaps << L"\n"
+               << L"  bursts=" << framer.Bursts() << L", malformed="
+               << framer.MalformedBursts() << L", carrier skipped="
+               << framer.SkippedBytes() << L", buffered=" << framer.BufferedBytes() << L"\n"
+               << L"  decoder input=" << decodeStats.inputFrames << L", output="
+               << decodeStats.outputSamples << L", PCM frames=" << decodeStats.pcmFrames
+               << L", clipped=" << decodeStats.clippedSamples << L", unmapped objects="
+               << decodeStats.unmappedObjects << L"\n"
+               << L"  max PCM queue=" << maximumQueuedFrames << L" frames\n";
+    PrintEndpointRenderStats(renderer.Stats());
 }
 
 void ProbeMediaTypes(const std::filesystem::path& inputPath) {

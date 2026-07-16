@@ -338,21 +338,44 @@ sync words aparecen como constantes en `DtsxHdmiEnc.dll` y `DTSXDecoder.dll`: el
 ambos paquetes y el decoder los despacha a rutinas separadas. FFmpeg solo implementa los
 componentes DTS publicados y por eso no puede decodificar este codec auxiliar.
 
-La decodificacion analogica DTS:X aun no esta habilitada. DTS Sound Unbound instala el MFT
-`DTSXDecoder`, que anuncia salida PCM 7.1 y hasta 12 objetos float con metadata. El endpoint virtual
-acepta su formato de metadata `{2736CABA-57CE-43DC-9B5D-FB14BF7907AC}` y expone 32 objetos
-dinamicos. Sin embargo, el MFT consulta el AppService de licencia de DTS antes de aceptar cualquier
-tipo de entrada. Una prueba de control genero DTS Core estandar, lo encapsulo en Matroska y Media
-Foundation lo identifico correctamente como `MFAudioFormat_DTS_HD`; el MFT rechazo incluso ese
-tipo nativo con `MF_E_INVALIDMEDIATYPE`. La consulta directa con `DTSXDecoder` y
-`CDTSXDecoder` devuelve `Status=ERROR`.
+La ruta analogica DTS:X esta habilitada mediante el MFT oficial `DTSXDecoder`. La prueba de
+`DTS:X Decoder` de Sound Unbound esta activa en esta maquina hasta el **31/07/2026**; el AppService
+responde `Status=OK`. Esta licencia es independiente de `DTS:X para centro de entretenimiento`, que
+solo habilita el encoder de juegos. El decoder no esta registrado como MFT Field-of-Use: aparece
+con y sin `MFT_ENUM_FLAG_FIELDOFUSE`, se activa sin invocar `IMFFieldOfUseMFTUnlock` y el callback
+registra cero llamadas. No se elude ningun control de licencia.
 
-El decoder no esta registrado como MFT Field-of-Use: aparece con y sin
-`MFT_ENUM_FLAG_FIELDOFUSE`, se activa sin invocar `IMFFieldOfUseMFTUnlock` y el callback registra
-cero llamadas. DTS documenta que **DTS:X Decoder** es una licencia o prueba separada dentro de
-Sound Unbound. Activar `DTS:X para centro de entretenimiento` habilita el encoder de juegos, pero
-no concede esa licencia de decodificacion de contenido. Esto es una frontera de licencia del codec,
-no un error del parser IEC ni algo que deba eludirse.
+El MFT anuncia PCM 7.1 y `MFAudioFormat_Float_SpatialObjects`. Como Windows no publica una fabrica
+para `IMFSpatialAudioSample`, el probe implementa la muestra y los
+`IMFSpatialAudioObjectBuffer` requeridos, con colecciones de metadata creadas por el endpoint. La
+captura de referencia produce 12 objetos de 512 frames por muestra: `FL, FR, FC, LFE, BL, BR, SL,
+SR, TFL, TFR, TBL, TBR`. Tambien las fixtures de objetos dinamicos salen renderizadas por DTS como
+una cama estatica 7.1.4, por lo que la ruta analogica no interpreta metadata privada.
+
+```powershell
+# Diagnostico de licencia y decodificacion offline.
+.\build\dolby-probe.exe probe-dtsx-license CDTSXDecoder
+.\build\dolby-probe.exe probe-dtsx-decode `
+  '.\captures\dtsx-spatial-714.wav' 16 spatial
+.\build\dolby-probe.exe probe-dtsx-decode `
+  '.\captures\dtsx-spatial-714.wav' 32 pcm '.\captures\dtsx-decoded-71.wav'
+
+# Puente de juegos DTS:X E1 a las salidas del perfil 7.1.4.
+.\tools\Start-LiveDtsX714.ps1 -DurationSeconds 3600 -Gain 0.25
+.\tools\Stop-LiveDtsX714.ps1
+```
+
+`live-dtsx-layout` consume el ring IEC 61937, separa los frames E1, decodifica incrementalmente y
+entrega los 12 canales a `MultiEndpointRenderer`; conserva trims, delays y correccion de deriva por
+endpoint. La prueba integral reinyecto la captura E1 al endpoint virtual y proceso 12.392.448 bytes,
+375 bursts y 192.000 frames: cero drops, gaps, bursts malformados, clipping, objetos sin mapear o
+starvation. Los errores de fase finales de las salidas secundarias fueron +0,063 ms y -0,367 ms.
+La reinyeccion reproducible es:
+
+```powershell
+.\build\dolby-probe.exe replay-iec61937 `
+  '.\captures\dtsx-spatial-714.wav' 'SinkDescription Sample' 1
+```
 
 `tools/Register-DolbyProbePackage.ps1` conserva este diagnostico reproducible: crea y firma el MSIX,
 registra el alias `dolby-probe-dtsx.exe` y solicita UAC una sola vez para confiar en el certificado
@@ -414,8 +437,9 @@ Capturas de referencia:
 - `src/wave_io.*`: lectura y escritura RIFF/WAVE compartida por capturas y extractores.
 - `src/capture_commands.cpp`: pruebas de transporte, Spatial Sound y loopback WASAPI.
 - `src/mat_capture_client.*`: cliente IOCTL del ring `\\.\DolbyDecoderMat`.
-- `src/media_foundation_probe.cpp`: enumeracion de MFTs, metadata espacial y diagnostico de licencia
-  del decoder DTS:X.
+- `src/media_foundation_probe.cpp`: enumeracion de MFTs, licencia, decoder incremental y puente
+  analogico DTS:X.
+- `src/spatial_audio_sample.*`: implementacion caller-owned de muestras y objetos espaciales MF.
 - `src/dtsx_analysis.cpp`: parser del EXSS auxiliar y de los paquetes privados del renderer DTS:X.
 - `src/mat_format.*`: operaciones comunes sobre transporte y metadata MAT.
 - `src/mat_analysis.cpp`: diagnosticos del carrier, posiciones de objetos y PCM multicanal.
@@ -425,6 +449,7 @@ Capturas de referencia:
 - `configs/realtek-c1u-714.ini`: cama Realtek 7.1, techo frontal C-1U y techo trasero Realtek.
 - `tools/SpeakerLayoutEditor`: editor grafico WPF del perfil de parlantes y salidas.
 - `tools/Start-Live714.ps1` / `tools/Stop-Live714.ps1`: administran el puente MAT 7.1.4.
+- `tools/Start-LiveDtsX714.ps1` / `tools/Stop-LiveDtsX714.ps1`: administran el puente DTS:X 7.1.4.
 - `build/dolby-probe.exe`: binario Windows ya compilado en esta maquina.
 
 La separacion modular conserva la salida del decoder byte por byte. El fixture estatico

@@ -14,6 +14,7 @@ add_executable(dolby-probe
   src/mat_pipeline.cpp
   src/multi_endpoint_renderer.cpp
   src/speaker_layout.cpp
+  src/spatial_audio_sample.cpp
   src/wave_io.cpp
 )
 target_compile_features(dolby-probe PRIVATE cxx_std_20)

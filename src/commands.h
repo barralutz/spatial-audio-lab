@@ -9,8 +9,16 @@
 
 namespace dolby {
 
+enum class DtsXDecodeOutput {
+    SpatialObjects,
+    Pcm71,
+};
+
 void RenderTransportTest(double seconds, const std::wstring& filter,
                          const std::wstring& mode);
+void ReplayIec61937Wave(const std::filesystem::path& inputPath,
+                        const std::wstring& endpointFilter,
+                        std::uint64_t repeatCount);
 void SpatialSignalTest(double seconds, const std::wstring& filter,
                        const std::wstring& mode);
 void CaptureLoopback(double seconds, const std::wstring& filter,
@@ -23,7 +31,11 @@ void ProbeWinRtDecoder(const std::wstring& runtimeClass);
 void ProbeSpatialMetadata(const std::wstring& endpointFilter);
 void ProbeDtsXLicense(const std::wstring& codecName);
 void ProbeDtsXFieldOfUse();
-void ProbeDtsXDecode(const std::filesystem::path& inputPath, std::size_t maxBursts);
+void ProbeDtsXDecode(const std::filesystem::path& inputPath, std::size_t maxBursts,
+                     DtsXDecodeOutput outputMode,
+                     const std::filesystem::path& outputPath = {});
+void PlayLiveDtsXLayout(double seconds, const std::filesystem::path& layoutPath,
+                        double gain, DWORD prebufferMilliseconds);
 void ProbeMediaTypes(const std::filesystem::path& inputPath);
 
 void AnalyzeFloatWave(const std::filesystem::path& inputPath);

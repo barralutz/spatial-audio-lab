@@ -230,6 +230,82 @@ void RenderTransportTest(const double seconds, const std::wstring& filter,
                << L"This is a transport marker, not a valid Dolby MAT payload.\n";
 }
 
+void ReplayIec61937Wave(const std::filesystem::path& inputPath,
+                        const std::wstring& endpointFilter,
+                        const std::uint64_t repeatCount) {
+    const WaveImage image = ReadWaveImage(inputPath);
+    const auto* format = reinterpret_cast<const WAVEFORMATEX*>(image.formatBytes.data());
+    if (format->wFormatTag != WAVE_FORMAT_EXTENSIBLE || format->nBlockAlign == 0 ||
+        image.dataBytes % format->nBlockAlign != 0 ||
+        sizeof(WAVEFORMATEX) + format->cbSize > image.formatBytes.size()) {
+        throw std::runtime_error("Input is not an aligned WAVEFORMATEXTENSIBLE carrier");
+    }
+    const std::uint64_t inputFrames = image.dataBytes / format->nBlockAlign;
+    if (format->nSamplesPerSec == 0 || inputFrames == 0 ||
+        inputFrames > (static_cast<std::uint64_t>(format->nSamplesPerSec) * 3'600ULL) /
+                          repeatCount) {
+        throw std::runtime_error("IEC 61937 replay duration is empty or exceeds one hour");
+    }
+    const std::uint64_t playbackFrames = inputFrames * repeatCount;
+    const BYTE* input = image.bytes.data() + image.dataOffset;
+    Endpoint endpoint = SelectEndpoint(endpointFilter);
+
+    ComPtr<IAudioClient> client;
+    ThrowIfFailed(endpoint.device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, &client),
+                  "Activate IEC 61937 replay client");
+    const HRESULT support = client->IsFormatSupported(AUDCLNT_SHAREMODE_EXCLUSIVE,
+                                                       format, nullptr);
+    if (support != S_OK) ThrowIfFailed(support, "Check IEC 61937 replay format");
+    constexpr REFERENCE_TIME requestedDuration = 1'000'000;
+    ThrowIfFailed(client->Initialize(AUDCLNT_SHAREMODE_EXCLUSIVE,
+                                     AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+                                     requestedDuration, requestedDuration, format, nullptr),
+                  "Initialize IEC 61937 replay");
+    WinHandle renderEvent(CreateEventW(nullptr, FALSE, FALSE, nullptr));
+    if (!renderEvent.IsValid()) throw std::runtime_error("Create IEC 61937 replay event failed");
+    ThrowIfFailed(client->SetEventHandle(renderEvent.Get()), "Set IEC 61937 replay event");
+
+    UINT32 bufferFrames = 0;
+    ThrowIfFailed(client->GetBufferSize(&bufferFrames), "Get IEC 61937 replay buffer size");
+    ComPtr<IAudioRenderClient> render;
+    ThrowIfFailed(client->GetService(IID_PPV_ARGS(&render)),
+                  "Get IEC 61937 replay render client");
+
+    std::uint64_t submittedFrames = 0;
+    const auto fill = [&]() {
+        BYTE* output = nullptr;
+        ThrowIfFailed(render->GetBuffer(bufferFrames, &output),
+                      "Get IEC 61937 replay buffer");
+        std::memset(output, 0, static_cast<std::size_t>(bufferFrames) * format->nBlockAlign);
+        const UINT32 validFrames = static_cast<UINT32>(std::min<std::uint64_t>(
+            bufferFrames, playbackFrames - submittedFrames));
+        for (UINT32 frame = 0; frame < validFrames; ++frame) {
+            const std::uint64_t inputFrame = (submittedFrames + frame) % inputFrames;
+            std::memcpy(output + static_cast<std::size_t>(frame) * format->nBlockAlign,
+                        input + inputFrame * format->nBlockAlign, format->nBlockAlign);
+        }
+        submittedFrames += validFrames;
+        ThrowIfFailed(render->ReleaseBuffer(bufferFrames, 0),
+                      "Release IEC 61937 replay buffer");
+    };
+
+    fill();
+    std::wcout << L"Replaying IEC 61937 carrier to " << endpoint.name << L"\n"
+               << L"  format=" << WaveFormatText(format) << L"\n"
+               << L"  frames=" << inputFrames << L" x " << repeatCount << L"\n";
+    ThrowIfFailed(client->Start(), "Start IEC 61937 replay");
+    while (submittedFrames < playbackFrames) {
+        if (WaitForSingleObject(renderEvent.Get(), 2'000) != WAIT_OBJECT_0) {
+            client->Stop();
+            throw std::runtime_error("IEC 61937 replay event timed out");
+        }
+        fill();
+    }
+    Sleep(static_cast<DWORD>(std::ceil(bufferFrames * 1000.0 / format->nSamplesPerSec)) + 20);
+    ThrowIfFailed(client->Stop(), "Stop IEC 61937 replay");
+    std::wcout << L"IEC 61937 replay complete: " << submittedFrames << L" frames\n";
+}
+
 struct SpatialTone {
     AudioObjectType type;
     float frequency;

@@ -31,6 +31,7 @@ void PrintUsage() {
         << L"dolby-probe list-endpoints\n"
         << L"dolby-probe set-default [endpoint-filter]\n"
         << L"dolby-probe render-test [seconds] [endpoint-filter] [pcm|mat20|mat21]\n"
+        << L"dolby-probe replay-iec61937 input.wav [endpoint-filter] [repeat]\n"
         << L"dolby-probe spatial-test [seconds] [endpoint-filter] "
            L"[bed|height|712|714|dynamic|dynamic-<position>|silence|impulse-<channel>]\n"
         << L"dolby-probe capture [seconds] [endpoint-filter] [output.wav]\n"
@@ -40,7 +41,8 @@ void PrintUsage() {
         << L"dolby-probe probe-spatial-metadata [endpoint-filter]\n"
         << L"dolby-probe probe-dtsx-license [codec-name]\n"
         << L"dolby-probe probe-dtsx-field-of-use\n"
-        << L"dolby-probe probe-dtsx-decode input.wav [max-bursts]\n"
+        << L"dolby-probe probe-dtsx-decode input.wav [max-bursts] [spatial|pcm] "
+           L"[output.wav]\n"
         << L"dolby-probe probe-media-types input-media\n"
         << L"dolby-probe capture-mat-ring [seconds] [output.wav] [poll-ms]\n"
         << L"dolby-probe capture-iec61937-ring [seconds] [output.wav] [poll-ms]\n"
@@ -59,6 +61,7 @@ void PrintUsage() {
         << L"dolby-probe test-layout [seconds] [layout.ini] [gain]\n"
         << L"dolby-probe test-speaker [seconds] [layout.ini] [speaker] [gain]\n"
         << L"dolby-probe live-layout [seconds] [layout.ini] [gain] [prebuffer-ms]\n\n"
+        << L"dolby-probe live-dtsx-layout [seconds] [layout.ini] [gain] [prebuffer-ms]\n\n"
         << L"An empty endpoint filter selects the default render endpoint.\n";
 }
 } // namespace dolby
@@ -114,6 +117,19 @@ int wmain(const int argc, wchar_t** argv) {
                 throw std::runtime_error("Render duration must be between 0 and 60 seconds");
             }
             RenderTransportTest(seconds, filter, mode);
+            return 0;
+        }
+
+        if (command == L"replay-iec61937") {
+            if (argc < 3) {
+                throw std::runtime_error("replay-iec61937 requires an input WAV path");
+            }
+            const std::wstring filter = argc >= 4 ? argv[3] : L"SinkDescription Sample";
+            const std::uint64_t repeatCount = argc >= 5 ? std::stoull(argv[4]) : 1;
+            if (repeatCount == 0 || repeatCount > 1'000) {
+                throw std::runtime_error("IEC 61937 repeat count must be between 1 and 1000");
+            }
+            ReplayIec61937Wave(argv[2], filter, repeatCount);
             return 0;
         }
 
@@ -208,6 +224,23 @@ int wmain(const int argc, wchar_t** argv) {
             return 0;
         }
 
+        if (command == L"live-dtsx-layout") {
+            const double seconds = argc >= 3 ? std::stod(argv[2]) : 60.0;
+            const std::filesystem::path layoutPath =
+                argc >= 4 ? argv[3] : L"configs\\realtek-c1u-714.ini";
+            const double gain = argc >= 5 ? std::stod(argv[4]) : 0.25;
+            const DWORD prebufferMilliseconds =
+                argc >= 6 ? static_cast<DWORD>(std::stoul(argv[5])) : 80;
+            if (seconds <= 0.0 || seconds > 3'600.0 || gain < 0.0 || gain > 1.0 ||
+                prebufferMilliseconds < 20 || prebufferMilliseconds > 500) {
+                throw std::runtime_error(
+                    "live-dtsx-layout requires 0 < seconds <= 3600, 0 <= gain <= 1 and "
+                    "20 <= prebuffer-ms <= 500");
+            }
+            PlayLiveDtsXLayout(seconds, layoutPath, gain, prebufferMilliseconds);
+            return 0;
+        }
+
         if (command == L"capture-process") {
             if (argc < 4) {
                 throw std::runtime_error("capture-process requires seconds and a process ID");
@@ -261,7 +294,18 @@ int wmain(const int argc, wchar_t** argv) {
             if (maxBursts == 0 || maxBursts > 10'000) {
                 throw std::runtime_error("max-bursts must be between 1 and 10000");
             }
-            ProbeDtsXDecode(argv[2], maxBursts);
+            const std::wstring mode = argc >= 5 ? Lowercase(argv[4]) : L"spatial";
+            if (mode != L"spatial" && mode != L"pcm") {
+                throw std::runtime_error("DTS:X output mode must be spatial or pcm");
+            }
+            const std::filesystem::path outputPath = argc >= 6 ? argv[5] : L"";
+            if (mode == L"spatial" && !outputPath.empty()) {
+                throw std::runtime_error("An output WAV path is valid only in pcm mode");
+            }
+            ProbeDtsXDecode(argv[2], maxBursts,
+                            mode == L"spatial" ? DtsXDecodeOutput::SpatialObjects
+                                               : DtsXDecodeOutput::Pcm71,
+                            outputPath);
             return 0;
         }
 
