@@ -64,7 +64,10 @@ conserva exactamente el SHA-256 de referencia.
 
 El editor WPF permite arrastrar cada parlante en vistas de planta y elevacion, modificar azimut,
 elevacion, nivel y ruta, editar endpoints/retardos y probar un parlante aislado. Guarda directamente
-el mismo INI consumido por el motor.
+el mismo INI consumido por el motor. La pestaña `Salidas` enumera los endpoints de reproduccion
+activos en un selector, permite actualizar la lista despues de conectar hardware y conserva los
+filtros de dispositivos desconectados marcandolos como no disponibles. `Restablecer posiciones`
+devuelve azimut y elevacion al esquema 7.1.4 estandar sin cambiar niveles, endpoints ni retardos.
 
 ```powershell
 .\tools\Build-DolbyProbe.ps1

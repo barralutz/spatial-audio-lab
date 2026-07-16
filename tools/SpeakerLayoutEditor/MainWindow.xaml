@@ -1,9 +1,9 @@
 <Window x:Class="SpeakerLayoutEditor.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Dolby Speaker Layout" Width="1280" Height="760"
+        Title="Dolby Speaker Layout" Width="1440" Height="760"
         WindowStartupLocation="CenterScreen"
-        MinWidth="980" MinHeight="640" Background="#F3F5F6"
+        MinWidth="1180" MinHeight="640" Background="#F3F5F6"
         FontFamily="Segoe UI" FontSize="13">
   <Window.Resources>
     <Style x:Key="IconButton" TargetType="Button">
@@ -60,7 +60,7 @@
       <Grid.ColumnDefinitions>
         <ColumnDefinition Width="210" />
         <ColumnDefinition Width="*" />
-        <ColumnDefinition Width="320" />
+        <ColumnDefinition Width="500" />
       </Grid.ColumnDefinitions>
 
       <Border Grid.Column="0" Background="#E9EDEF" BorderBrush="#C9CFD3"
@@ -153,7 +153,15 @@
                 <TextBlock Text="Salida" Margin="0,4,0,6" />
                 <ComboBox x:Name="OutputCombo" DisplayMemberPath="Name"
                           SelectionChanged="OutputSelectionChanged" Height="30" />
-                <TextBlock Text="Ganancia de prueba" Margin="0,18,0,2" />
+                <Button Height="36" Margin="0,14,0,0" Click="ResetPositionsClick"
+                        ToolTip="Restablece el azimut y la elevacion de todos los parlantes">
+                  <StackPanel Orientation="Horizontal">
+                    <TextBlock FontFamily="Segoe Fluent Icons" Text="&#xE777;"
+                               FontSize="15" Margin="0,0,8,0" />
+                    <TextBlock Text="Restablecer posiciones" />
+                  </StackPanel>
+                </Button>
+                <TextBlock Text="Ganancia de prueba" Margin="0,14,0,2" />
                 <Slider x:Name="TestGainSlider" Minimum="0" Maximum="0.25" Value="0.08" />
                 <Button Height="38" Margin="0,10,0,0" Click="TestSpeakerClick"
                         HorizontalContentAlignment="Center">
@@ -167,20 +175,55 @@
             </ScrollViewer>
           </TabItem>
           <TabItem Header="Salidas">
-            <DataGrid x:Name="OutputGrid" Margin="4,12,4,4" AutoGenerateColumns="False"
-                      CanUserAddRows="False" CanUserDeleteRows="False"
-                      HeadersVisibility="Column" RowHeaderWidth="0">
-              <DataGrid.Columns>
-                <DataGridTextColumn Header="Ruta" Binding="{Binding Name}" IsReadOnly="True"
-                                    Width="80" />
-                <DataGridTextColumn Header="Endpoint" Binding="{Binding Endpoint}"
-                                    Width="*" />
-                <DataGridTextColumn Header="ms" Binding="{Binding DelayMilliseconds}"
-                                    Width="48" />
-                <DataGridTextColumn Header="Canales" Binding="{Binding SpeakersText}"
-                                    IsReadOnly="True" Width="130" />
-              </DataGrid.Columns>
-            </DataGrid>
+            <Grid Margin="4,12,4,4">
+              <Grid.RowDefinitions>
+                <RowDefinition Height="34" />
+                <RowDefinition Height="*" />
+              </Grid.RowDefinitions>
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="ENDPOINTS ACTIVOS" FontSize="11" Foreground="#596168"
+                           FontWeight="SemiBold" VerticalAlignment="Center" />
+                <Button Grid.Column="1" x:Name="RefreshEndpointsButton" Width="30" Height="28"
+                        FontFamily="Segoe Fluent Icons" FontSize="14" Content="&#xE72C;"
+                        ToolTip="Actualizar endpoints" Click="RefreshEndpointsClick" />
+              </Grid>
+              <DataGrid Grid.Row="1" x:Name="OutputGrid" AutoGenerateColumns="False"
+                        CanUserAddRows="False" CanUserDeleteRows="False"
+                        HeadersVisibility="Column" RowHeaderWidth="0" RowHeight="38"
+                        ColumnHeaderHeight="30" GridLinesVisibility="Horizontal">
+                <DataGrid.Columns>
+                  <DataGridTextColumn Header="Ruta" Binding="{Binding Name}" IsReadOnly="True"
+                                      Width="78" />
+                  <DataGridTemplateColumn Header="Endpoint" Width="*">
+                    <DataGridTemplateColumn.CellTemplate>
+                      <DataTemplate>
+                        <ComboBox ItemsSource="{Binding EndpointChoices,
+                                    RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                  DisplayMemberPath="DisplayName" SelectedValuePath="Filter"
+                                  SelectedValue="{Binding Endpoint, Mode=OneWay}"
+                                  SelectionChanged="EndpointSelectionChanged"
+                                  ToolTip="{Binding Endpoint}" Height="28"
+                                  VerticalAlignment="Center" />
+                      </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                  </DataGridTemplateColumn>
+                  <DataGridTextColumn Header="ms" Binding="{Binding DelayMilliseconds}"
+                                      Width="48" />
+                  <DataGridTemplateColumn Header="Canales" Width="118" IsReadOnly="True">
+                    <DataGridTemplateColumn.CellTemplate>
+                      <DataTemplate>
+                        <TextBlock Text="{Binding SpeakersText}" ToolTip="{Binding SpeakersText}"
+                                   TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                      </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                  </DataGridTemplateColumn>
+                </DataGrid.Columns>
+              </DataGrid>
+            </Grid>
           </TabItem>
         </TabControl>
       </Border>

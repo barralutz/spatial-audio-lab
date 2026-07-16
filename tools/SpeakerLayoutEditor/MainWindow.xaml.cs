@@ -1,7 +1,9 @@
 using Microsoft.Win32;
+using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -11,6 +13,10 @@ using IOPath = System.IO.Path;
 
 namespace SpeakerLayoutEditor;
 
+public sealed record EndpointChoice(string Filter, string DisplayName);
+
+sealed record AudioEndpointInfo(string Name, string Id);
+
 public partial class MainWindow : Window {
     static readonly Color[] RouteColors = [
         Color.FromRgb(52, 120, 165),
@@ -18,8 +24,16 @@ public partial class MainWindow : Window {
         Color.FromRgb(64, 143, 104),
         Color.FromRgb(143, 84, 153)
     ];
+    static readonly Dictionary<string, (double Azimuth, double Elevation)> DefaultPositions =
+        new(StringComparer.OrdinalIgnoreCase) {
+            ["FL"] = (-30, 0), ["FR"] = (30, 0), ["FC"] = (0, 0), ["LFE"] = (0, 0),
+            ["BL"] = (-150, 0), ["BR"] = (150, 0), ["SL"] = (-90, 0), ["SR"] = (90, 0),
+            ["TFL"] = (-45, 45), ["TFR"] = (45, 45),
+            ["TBL"] = (-135, 45), ["TBR"] = (135, 45)
+        };
 
     readonly string repoRoot;
+    readonly List<AudioEndpointInfo> activeEndpoints = [];
     LayoutDocument? document;
     SpeakerDefinition? selectedSpeaker;
     string? currentPath;
@@ -29,11 +43,18 @@ public partial class MainWindow : Window {
     Point dragStartPoint;
     Vector dragPointerOffset;
     bool dragActivated;
+    bool updatingEndpointChoices;
+    public ObservableCollection<EndpointChoice> EndpointChoices { get; } = [];
 
     public MainWindow() {
         InitializeComponent();
         repoRoot = FindRepoRoot();
-        Loaded += (_, _) => LoadProfile(IOPath.Combine(repoRoot, "configs", "realtek-c1u-714.ini"));
+        Loaded += WindowLoaded;
+    }
+
+    async void WindowLoaded(object sender, RoutedEventArgs e) {
+        LoadProfile(IOPath.Combine(repoRoot, "configs", "realtek-c1u-714.ini"));
+        await RefreshEndpointsAsync();
     }
 
     static string FindRepoRoot() {
@@ -57,6 +78,7 @@ public partial class MainWindow : Window {
             LayoutNameText.Text = document.Name;
             PathText.Text = currentPath;
             PopulateRouteLegend();
+            RebuildEndpointChoices();
             SpeakerList.SelectedIndex = 0;
             StatusText.Text = "Perfil cargado";
             RedrawMaps();
@@ -64,6 +86,116 @@ public partial class MainWindow : Window {
             MessageBox.Show(this, error.Message, "No se pudo abrir el perfil",
                 MessageBoxButton.OK, MessageBoxImage.Error);
         }
+    }
+
+    async void RefreshEndpointsClick(object sender, RoutedEventArgs e) =>
+        await RefreshEndpointsAsync();
+
+    async Task RefreshEndpointsAsync() {
+        RefreshEndpointsButton.IsEnabled = false;
+        try {
+            string executable = IOPath.Combine(repoRoot, "build", "dolby-probe.exe");
+            if (!File.Exists(executable)) {
+                throw new FileNotFoundException("Ejecuta tools\\Build-DolbyProbe.ps1.", executable);
+            }
+            ProcessStartInfo start = new(executable) {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8
+            };
+            start.ArgumentList.Add("list-endpoints");
+            using Process process = Process.Start(start) ??
+                throw new InvalidOperationException("No se pudo consultar los endpoints.");
+            Task<string> outputTask = process.StandardOutput.ReadToEndAsync();
+            Task<string> errorTask = process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+            string output = await outputTask;
+            string error = await errorTask;
+            if (process.ExitCode != 0) {
+                throw new InvalidOperationException(
+                    string.IsNullOrWhiteSpace(error) ? "Fallo la consulta de endpoints." : error.Trim());
+            }
+
+            activeEndpoints.Clear();
+            foreach (string line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries)) {
+                string[] fields = line.TrimEnd('\r').Split('\t', 2);
+                if (fields.Length == 2 && fields[0].Length != 0 && fields[1].Length != 0) {
+                    activeEndpoints.Add(new AudioEndpointInfo(fields[0], fields[1]));
+                }
+            }
+            activeEndpoints.Sort((first, second) =>
+                StringComparer.CurrentCultureIgnoreCase.Compare(first.Name, second.Name));
+            RebuildEndpointChoices();
+            StatusText.Text = $"{activeEndpoints.Count} endpoints activos";
+        } catch (Exception error) {
+            RebuildEndpointChoices();
+            StatusText.Text = $"No se pudieron actualizar los endpoints: {error.Message}";
+        } finally {
+            RefreshEndpointsButton.IsEnabled = true;
+        }
+    }
+
+    void RebuildEndpointChoices() {
+        updatingEndpointChoices = true;
+        try {
+            EndpointChoices.Clear();
+            var duplicateNames = activeEndpoints
+                .GroupBy(endpoint => endpoint.Name, StringComparer.OrdinalIgnoreCase)
+                .Where(group => group.Count() > 1)
+                .Select(group => group.Key)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            foreach (AudioEndpointInfo endpoint in activeEndpoints) {
+                string? configuredFilter = document?.Outputs
+                    .Select(output => output.Endpoint)
+                    .FirstOrDefault(filter => EndpointMatchesExactlyOne(filter, endpoint));
+                string filter = configuredFilter ??
+                    (duplicateNames.Contains(endpoint.Name) ? endpoint.Id : endpoint.Name);
+                string displayName = duplicateNames.Contains(endpoint.Name)
+                    ? $"{endpoint.Name} [{ShortEndpointId(endpoint.Id)}]"
+                    : endpoint.Name;
+                EndpointChoices.Add(new EndpointChoice(filter, displayName));
+            }
+
+            if (document is not null) {
+                foreach (OutputRouteDefinition output in document.Outputs) {
+                    if (EndpointChoices.Any(choice => choice.Filter.Equals(
+                            output.Endpoint, StringComparison.OrdinalIgnoreCase))) continue;
+                    EndpointChoices.Add(new EndpointChoice(
+                        output.Endpoint, $"{output.Endpoint} (no disponible)"));
+                }
+            }
+            OutputGrid.Items.Refresh();
+        } finally {
+            updatingEndpointChoices = false;
+        }
+    }
+
+    void EndpointSelectionChanged(object sender, SelectionChangedEventArgs e) {
+        if (updatingEndpointChoices || sender is not ComboBox comboBox ||
+            comboBox.DataContext is not OutputRouteDefinition output ||
+            comboBox.SelectedValue is not string filter) return;
+        if (output.Endpoint.Equals(filter, StringComparison.OrdinalIgnoreCase)) return;
+        output.Endpoint = filter;
+        StatusText.Text = $"Endpoint actualizado: {output.Name}";
+    }
+
+    bool EndpointMatchesExactlyOne(string filter, AudioEndpointInfo candidate) {
+        if (!EndpointMatches(candidate, filter)) return false;
+        return activeEndpoints.Count(endpoint => EndpointMatches(endpoint, filter)) == 1;
+    }
+
+    static bool EndpointMatches(AudioEndpointInfo endpoint, string filter) =>
+        endpoint.Name.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+        endpoint.Id.Contains(filter, StringComparison.OrdinalIgnoreCase);
+
+    static string ShortEndpointId(string endpointId) {
+        int closingBrace = endpointId.LastIndexOf('}');
+        int start = Math.Max(0, closingBrace - 8);
+        return endpointId[start..Math.Max(start, closingBrace)];
     }
 
     void PopulateRouteLegend() {
@@ -176,6 +308,20 @@ public partial class MainWindow : Window {
         target.NotifySpeakersChanged();
         OutputGrid.Items.Refresh();
         RedrawMaps();
+    }
+
+    void ResetPositionsClick(object sender, RoutedEventArgs e) {
+        if (document is null) return;
+        int reset = 0;
+        foreach (SpeakerDefinition speaker in document.Speakers) {
+            if (!DefaultPositions.TryGetValue(speaker.Name, out var position)) continue;
+            speaker.Azimuth = position.Azimuth;
+            speaker.Elevation = position.Elevation;
+            ++reset;
+        }
+        UpdateSpeakerControls();
+        RedrawMaps();
+        StatusText.Text = $"{reset} posiciones restablecidas (sin guardar)";
     }
 
     async void TestSpeakerClick(object sender, RoutedEventArgs e) {

@@ -11,9 +11,24 @@
 
 namespace dolby {
 
+std::string Utf8(const std::wstring& value) {
+    if (value.empty()) return {};
+    const int bytes = WideCharToMultiByte(CP_UTF8, 0, value.data(),
+                                          static_cast<int>(value.size()),
+                                          nullptr, 0, nullptr, nullptr);
+    if (bytes <= 0) throw std::runtime_error("Could not encode endpoint name as UTF-8");
+    std::string result(static_cast<std::size_t>(bytes), '\0');
+    if (WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()),
+                            result.data(), bytes, nullptr, nullptr) != bytes) {
+        throw std::runtime_error("Could not encode endpoint name as UTF-8");
+    }
+    return result;
+}
+
 void PrintUsage() {
     std::wcout
         << L"dolby-probe list\n"
+        << L"dolby-probe list-endpoints\n"
         << L"dolby-probe set-default [endpoint-filter]\n"
         << L"dolby-probe render-test [seconds] [endpoint-filter] [pcm|mat20|mat21]\n"
         << L"dolby-probe spatial-test [seconds] [endpoint-filter] "
@@ -50,6 +65,13 @@ int wmain(const int argc, wchar_t** argv) {
         if (command == L"list") {
             for (const auto& endpoint : EnumerateRenderEndpoints()) {
                 PrintEndpoint(endpoint);
+            }
+            return 0;
+        }
+
+        if (command == L"list-endpoints") {
+            for (const auto& endpoint : EnumerateRenderEndpoints()) {
+                std::cout << Utf8(endpoint.name) << '\t' << Utf8(endpoint.id) << '\n';
             }
             return 0;
         }
