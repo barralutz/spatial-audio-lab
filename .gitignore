@@ -1,0 +1,14 @@
+/build*/
+/captures/
+/generated/
+/.vs/
+
+*.obj
+*.pdb
+*.wav
+*.log
+
+**/bin/
+**/obj/
+/tools/truehdd/*.exe
+/vlc-help.txt

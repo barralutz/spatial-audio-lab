@@ -1,0 +1,21 @@
+cmake_minimum_required(VERSION 3.24)
+
+project(dolby_decoder_probe LANGUAGES CXX)
+
+add_executable(dolby-probe
+  src/audio_platform.cpp
+  src/capture_commands.cpp
+  src/dolby_probe.cpp
+  src/mat_analysis.cpp
+  src/mat_capture_client.cpp
+  src/mat_format.cpp
+  src/mat_pipeline.cpp
+  src/wave_io.cpp
+)
+target_compile_features(dolby-probe PRIVATE cxx_std_20)
+target_compile_definitions(dolby-probe PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_link_libraries(dolby-probe PRIVATE ole32 uuid avrt propsys mmdevapi)
+
+if(MSVC)
+  target_compile_options(dolby-probe PRIVATE /W4 /permissive- /EHsc)
+endif()

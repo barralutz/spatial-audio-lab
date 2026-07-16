@@ -1,0 +1,15 @@
+[submodule "driver/windows-driver-samples"]
+	path = driver/windows-driver-samples
+	url = https://github.com/microsoft/Windows-driver-samples.git
+[submodule "third_party/Cavern"]
+	path = third_party/Cavern
+	url = https://github.com/VoidXH/Cavern.git
+[submodule "third_party/FFmpeg"]
+	path = third_party/FFmpeg
+	url = https://github.com/FFmpeg/FFmpeg.git
+[submodule "third_party/truehdd-src"]
+	path = third_party/truehdd-src
+	url = https://github.com/truehdd/truehdd.git
+[submodule "third_party/dolby-atmos-encoder"]
+	path = third_party/dolby-atmos-encoder
+	url = https://github.com/raress96/dolby-atmos-encoder.git
