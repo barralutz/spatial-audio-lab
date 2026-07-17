@@ -503,6 +503,17 @@ public partial class MainWindow : Window {
         Process.Start(new ProcessStartInfo(logPath) { UseShellExecute = true });
     }
 
+    void OpenSpatialSettingsClick(object sender, RoutedEventArgs e) {
+        try {
+            Process.Start(new ProcessStartInfo("ms-settings:sound") {
+                UseShellExecute = true
+            });
+        } catch (Exception error) {
+            MessageBox.Show(this, error.Message, "No se pudo abrir Sonido",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     void RebuildBridgeMeters() {
         BridgeMeterPanel.Children.Clear();
         channelMeters.Clear();

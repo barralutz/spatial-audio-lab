@@ -48,5 +48,5 @@ if ($LASTEXITCODE -ne 0) {
     throw "dolby-probe build failed: $LASTEXITCODE"
 }
 Copy-Item (Join-Path $buildRoot 'dolby-probe.exe') `
-    (Join-Path $publishRoot 'dolby-probe.exe') -Force
+    (Join-Path $publishRoot 'dolby-probe.exe') -Force -ErrorAction Stop
 Write-Host "Built: $(Join-Path $publishRoot 'dolby-probe.exe')"

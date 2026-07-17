@@ -30,6 +30,7 @@ void PrintUsage() {
         << L"dolby-probe list\n"
         << L"dolby-probe list-endpoints\n"
         << L"dolby-probe set-default [endpoint-filter]\n"
+        << L"dolby-probe device-format [endpoint-filter]\n"
         << L"dolby-probe render-test [seconds] [endpoint-filter] [pcm|mat20|mat21]\n"
         << L"dolby-probe replay-iec61937 input.wav [endpoint-filter] [repeat]\n"
         << L"dolby-probe spatial-test [seconds] [endpoint-filter] "
@@ -96,6 +97,12 @@ int wmain(const int argc, wchar_t** argv) {
         if (command == L"set-default") {
             const std::wstring filter = argc >= 3 ? argv[2] : L"SinkDescription Sample";
             SetDefaultEndpoint(filter);
+            return 0;
+        }
+
+        if (command == L"device-format") {
+            const std::wstring filter = argc >= 3 ? argv[2] : L"SinkDescription Sample";
+            PrintConfiguredFormats(filter);
             return 0;
         }
 

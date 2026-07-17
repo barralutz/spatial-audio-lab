@@ -219,6 +219,45 @@ void SetDefaultEndpoint(const std::wstring& filter) {
                << L"ID: " << endpoint.id << L"\n";
 }
 
+namespace {
+
+void PrintPolicyFormat(const wchar_t* label, const HRESULT result, WAVEFORMATEX* format) {
+    std::wcout << L"  " << label << L": ";
+    if (SUCCEEDED(result) && format != nullptr) {
+        std::wcout << WaveFormatText(format) << L"\n";
+    } else {
+        std::wcout << HResultText(result) << L"\n";
+    }
+    CoTaskMemFree(format);
+}
+
+} // namespace
+
+void PrintConfiguredFormats(const std::wstring& filter) {
+    const Endpoint endpoint = SelectEndpoint(filter);
+    ComPtr<IPolicyConfig> policy;
+    ThrowIfFailed(CoCreateInstance(__uuidof(PolicyConfigClient), nullptr, CLSCTX_ALL,
+                                   IID_PPV_ARGS(&policy)),
+                  "Create audio policy client");
+
+    std::wcout << L"Configured formats for: " << endpoint.name << L"\n"
+               << L"ID: " << endpoint.id << L"\n";
+
+    WAVEFORMATEX* mixFormat = nullptr;
+    const HRESULT mixResult = policy->GetMixFormat(endpoint.id.c_str(), &mixFormat);
+    PrintPolicyFormat(L"mix", mixResult, mixFormat);
+
+    WAVEFORMATEX* currentFormat = nullptr;
+    const HRESULT currentResult =
+        policy->GetDeviceFormat(endpoint.id.c_str(), FALSE, &currentFormat);
+    PrintPolicyFormat(L"device current", currentResult, currentFormat);
+
+    WAVEFORMATEX* defaultFormat = nullptr;
+    const HRESULT defaultResult =
+        policy->GetDeviceFormat(endpoint.id.c_str(), TRUE, &defaultFormat);
+    PrintPolicyFormat(L"device default", defaultResult, defaultFormat);
+}
+
 WAVEFORMATEXTENSIBLE MakePcmFormat(const WORD channels, const DWORD channelMask) {
     WAVEFORMATEXTENSIBLE format{};
     format.Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;

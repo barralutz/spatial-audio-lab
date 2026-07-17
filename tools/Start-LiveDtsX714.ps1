@@ -50,6 +50,7 @@ if ($existing.Count -ne 0) {
 if ($LASTEXITCODE -ne 0) {
     throw "Could not select SinkDescription Sample: $LASTEXITCODE"
 }
+& (Join-Path $PSScriptRoot 'Test-SpatialProvider.ps1') -Mode DtsX
 
 Remove-Item $stdout, $stderr, $pidFile -Force -ErrorAction SilentlyContinue
 $gainText = $Gain.ToString([Globalization.CultureInfo]::InvariantCulture)

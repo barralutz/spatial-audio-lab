@@ -76,10 +76,21 @@ conserva los filtros de dispositivos desconectados marcandolos como no disponibl
 posiciones` devuelve azimut y elevacion al esquema 7.1.4 estandar sin cambiar niveles, endpoints ni
 retardos.
 La pestaña `Puentes` selecciona `Dolby MAT` o `DTS:X`, inicia y detiene el script correspondiente,
-controla ganancia, prebuffer y duracion, muestra el PID activo y abre su registro. Si un puente ya
-esta ejecutandose, el editor selecciona su modo, bloquea el arranque del otro y dirige `Detener` al
-proceso activo. El puente se ejecuta como proceso independiente y continua activo al cerrar el
-editor; si hace falta elevacion, Windows solicita UAC al ejecutar el script correspondiente.
+controla ganancia, prebuffer y duracion, muestra el PID activo, abre su registro y ofrece acceso
+directo a la configuracion de sonido espacial. Si un puente ya esta ejecutandose, el editor
+selecciona su modo, bloquea el arranque del otro y dirige `Detener` al proceso activo. El puente se
+ejecuta como proceso independiente y continua activo al cerrar el editor; si hace falta elevacion,
+Windows solicita UAC al ejecutar el script correspondiente.
+
+Antes de iniciar, ambos scripts verifican el carrier configurado y abren durante 250 ms un stream
+espacial silencioso. Atmos solo se acepta con MAT y la firma observada del renderer Dolby
+(`0xC1FFE`, 20 objetos); DTS:X exige carrier E1/E2 y un stream operativo. Esto evita iniciar un
+puente que quedaria mudo cuando `Formato` muestra Atmos pero `Sonido espacial` todavia conserva
+DTS:X. Para cambiar de codec: detener el puente, seleccionar el codec deseado tanto en `Formato`
+como en `Sonido espacial`, y volver a iniciar. Si Dolby desaparece del segundo selector,
+`tools\Repair-DolbySpatialProvider.ps1` vuelve a registrar Dolby Access sin borrar sus datos,
+reinicia la pila de audio y abre Dolby Access para repetir `Dolby Atmos for Home Theater >
+Configurar`.
 La misma pestaña muestra RMS suavizado y retencion de pico para cada canal logico del perfil. Los
 medidores se toman despues del decoder y antes de la ganancia global, trims y distribucion entre
 endpoints, por lo que permiten distinguir si el contenido realmente activa `TFL/TFR/TBL/TBR`. El
@@ -483,6 +494,8 @@ Capturas de referencia:
 - `tools/SpeakerLayoutEditor`: editor grafico WPF del perfil, salidas, puentes y medidores de canal.
 - `tools/Start-Live714.ps1` / `tools/Stop-Live714.ps1`: administran el puente MAT 7.1.4.
 - `tools/Start-LiveDtsX714.ps1` / `tools/Stop-LiveDtsX714.ps1`: administran el puente DTS:X 7.1.4.
+- `tools/Test-SpatialProvider.ps1`: preflight de carrier, renderer y stream espacial.
+- `tools/Repair-DolbySpatialProvider.ps1`: repara el registro de Dolby Access y reinicia audio.
 - `build/dolby-probe.exe`: binario Windows ya compilado en esta maquina.
 
 La separacion modular conserva la salida del decoder byte por byte. El fixture estatico

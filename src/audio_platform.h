@@ -107,6 +107,7 @@ double Decibels(double linear);
 std::vector<Endpoint> EnumerateRenderEndpoints();
 Endpoint SelectEndpoint(const std::wstring& filter);
 void SetDefaultEndpoint(const std::wstring& filter);
+void PrintConfiguredFormats(const std::wstring& filter);
 void PrintEndpoint(const Endpoint& endpoint);
 
 WAVEFORMATEXTENSIBLE MakePcmFormat(WORD channels, DWORD channelMask);
