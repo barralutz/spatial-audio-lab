@@ -1,7 +1,7 @@
 <Window x:Class="SpeakerLayoutEditor.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Dolby Speaker Layout" Width="1440" Height="760"
+        Title="Spatial Speaker Layout" Width="1440" Height="760"
         WindowStartupLocation="CenterScreen"
         MinWidth="1180" MinHeight="640" Background="#F3F5F6"
         FontFamily="Segoe UI" FontSize="13">
@@ -271,6 +271,8 @@
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="8" />
                     <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="8" />
+                    <ColumnDefinition Width="*" />
                   </Grid.ColumnDefinitions>
                   <RadioButton x:Name="MatModeButton" Style="{StaticResource SegmentButton}"
                                GroupName="BridgeMode" IsChecked="True" Content="Dolby MAT"
@@ -278,6 +280,10 @@
                   <RadioButton Grid.Column="2" x:Name="DtsXModeButton"
                                Style="{StaticResource SegmentButton}" GroupName="BridgeMode"
                                Content="DTS:X" Click="BridgeModeClick" />
+                  <RadioButton Grid.Column="4" x:Name="PcmModeButton"
+                               Style="{StaticResource SegmentButton}" GroupName="BridgeMode"
+                               Content="PCM 7.1.4" Click="BridgeModeClick"
+                               ToolTip="Renderer propio sin codificador Dolby o DTS" />
                 </Grid>
 
                 <Grid Margin="0,0,0,22">
@@ -338,18 +344,6 @@
                 </Grid>
                 <Slider x:Name="BridgePrebufferSlider" Minimum="20" Maximum="500" Value="40"
                         TickFrequency="10" IsSnapToTickEnabled="True"
-                        ValueChanged="BridgeControlChanged" />
-
-                <Grid>
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="80" />
-                  </Grid.ColumnDefinitions>
-                  <TextBlock Text="Duracion" />
-                  <TextBlock Grid.Column="1" x:Name="BridgeDurationValue" TextAlignment="Right" />
-                </Grid>
-                <Slider x:Name="BridgeDurationSlider" Minimum="1" Maximum="60" Value="60"
-                        TickFrequency="1" IsSnapToTickEnabled="True"
                         ValueChanged="BridgeControlChanged" />
 
                 <Grid Margin="0,12,0,0">

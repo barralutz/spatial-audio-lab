@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
-    [ValidateRange(1, 3600)]
-    [int]$DurationSeconds = 3600,
+    [ValidateRange(0, 3600)]
+    [int]$DurationSeconds = 0,
 
     [ValidateRange(0.0, 1.0)]
     [double]$Gain = 0.25,
@@ -41,10 +41,11 @@ if (-not (Test-Path $layoutPath)) {
 New-Item -ItemType Directory -Path $captureRoot -Force | Out-Null
 
 $existing = @(Get-CimInstance Win32_Process -Filter "Name='dolby-probe.exe'" |
-    Where-Object { $_.CommandLine -match '(?i)\blive-(dtsx-)?layout\b' })
+    Where-Object { $_.CommandLine -match '(?i)\blive-(dtsx-|pcm-)?layout\b' })
 if ($existing.Count -ne 0) {
     & (Join-Path $PSScriptRoot 'Stop-Live714.ps1')
     & (Join-Path $PSScriptRoot 'Stop-LiveDtsX714.ps1')
+    & (Join-Path $PSScriptRoot 'Stop-LivePcm714.ps1')
     Start-Sleep -Milliseconds 300
 }
 
@@ -65,7 +66,8 @@ if ($process.HasExited) {
 }
 
 Set-Content -Path $pidFile -Value $process.Id -Encoding Ascii
-Write-Host "live-layout started: PID=$($process.Id), duration=$DurationSeconds s, gain=$gainText, latency=$latencyText."
+$durationText = if ($DurationSeconds -eq 0) { 'until stopped' } else { "$DurationSeconds s" }
+Write-Host "live-layout started: PID=$($process.Id), duration=$durationText, gain=$gainText, latency=$latencyText."
 Write-Host "Layout: $layoutPath"
 Write-Host "Log: $stdout"
 Write-Host 'Stop with: .\tools\Stop-Live714.ps1'

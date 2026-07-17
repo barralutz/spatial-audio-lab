@@ -17,10 +17,15 @@ Windows spatial-audio `0x63F` channel mask. Dolby Atmos Home Theater now opens M
 `CSaveData` has captured the real renderer output. The current build also copies MAT 2.0/2.1 render
 bytes into a 4 MiB nonpaged ring and exposes `\\.\DolbyDecoderMat` to administrators. The user-mode
 probe reads it through bounded `READ`, `GET_STATS`, and `RESET` IOCTLs; decoding remains out of
-kernel. A four-second test transferred 12,294,144 bytes with no sequence gaps or overflows.
-The currently loaded package is `oem117.inf`, version `4.5.27.5`. A post-reboot end-to-end test
-decoded 199 bursts with no driver drops, malformed bursts, clipping, active starvation, clock drift,
-or diagnostic WAV creation.
+kernel. Protocol v3 additionally captures the exact 12-channel PCM 7.1.4 format at 48 kHz and
+reports its sample rate, channel mask, bit depth and block alignment. The endpoint uses mask
+`0x2D63F`; PCM remains uninterpreted in kernel and is routed in user mode. A four-second MAT test
+transferred 12,294,144 bytes with no sequence gaps or overflows.
+The previously loaded package was `oem121.inf`, version `17.14.17.873`. Package `oem123.inf`,
+version `2.55.40.516`, contains protocol v3 and PCM 7.1.4 and is selected pending a reboot. The
+intermediate `oem122.inf` build is superseded. The previous post-reboot end-to-end MAT test decoded
+199 bursts with no driver drops, malformed bursts, clipping, active starvation, clock drift, or
+diagnostic WAV creation.
 
 Kernel path `\DriverData` is a Windows-managed symbolic link. User mode must resolve it through the
 `DriverData` environment variable. On this machine it is

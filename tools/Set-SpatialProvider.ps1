@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('Atmos', 'DtsX')]
+    [ValidateSet('Atmos', 'DtsX', 'Pcm')]
     [string]$Mode,
 
     [string]$EndpointFilter = 'SinkDescription Sample',
@@ -232,6 +232,32 @@ function New-SpatialCarrier([byte[]]$Current, [string]$RequestedMode) {
     return $result
 }
 
+function Write-NativePcmRegistryState(
+        [string]$RegistrySubKey,
+        [string[]]$ValueNames,
+        [hashtable]$Original) {
+    [SpatialRegistryAccess]::SetBinary($RegistrySubKey, $ValueNames[0],
+        [SpatialRegistryAccess]::FromHex('02000000010000000000'))
+    [SpatialRegistryAccess]::SetBinary($RegistrySubKey, $ValueNames[1],
+        [SpatialRegistryAccess]::FromHex('410000000100000000'))
+
+    $providerBytes = [Math]::Max(88, $Original[$ValueNames[2]].Length)
+    $providerState = New-Object byte[] $providerBytes
+    Set-Bytes $providerState 0 `
+        ([SpatialRegistryAccess]::FromHex('41000000010000000200005A'))
+    [SpatialRegistryAccess]::SetBinary($RegistrySubKey, $ValueNames[2], $providerState)
+
+    $selection = New-Object byte[] 32
+    Set-Bytes $selection 0 `
+        ([SpatialRegistryAccess]::FromHex('41000000010000000000000000000000'))
+    [SpatialRegistryAccess]::SetBinary($RegistrySubKey, $ValueNames[3], $selection)
+
+    [SpatialRegistryAccess]::SetBinary($RegistrySubKey, $ValueNames[4],
+        [SpatialRegistryAccess]::FromHex(
+            '4100000001000000FEFF0C0080BB0000009411001800100016001000' +
+            '3FD602000100000000001000800000AA00389B71'))
+}
+
 function Write-SpatialRegistryState(
         [string]$RegistrySubKey,
         [string[]]$ValueNames,
@@ -304,21 +330,35 @@ function Set-SpatialRegistryFallback([string]$RequestedMode) {
         $original[$name] = [SpatialRegistryAccess]::GetBinary($registrySubKey, $name)
     }
 
-    $format = if ($RequestedMode -eq 'Atmos') { $atmosFormat } else { $dtsXFormat }
+    $format = if ($RequestedMode -eq 'Atmos') {
+        $atmosFormat
+    } elseif ($RequestedMode -eq 'DtsX') {
+        $dtsXFormat
+    } else {
+        [Guid]::Empty
+    }
     [uint32]$staticMask = if ($RequestedMode -eq 'Atmos') { 0xC1FFE } else { 0xFFFFE }
     [uint32]$dynamicObjects = if ($RequestedMode -eq 'Atmos') { 20 } else { 32 }
 
     try {
-        Write-SpatialRegistryState $registrySubKey $valueNames $original `
-            $RequestedMode $format $staticMask $dynamicObjects
+        if ($RequestedMode -eq 'Pcm') {
+            Write-NativePcmRegistryState $registrySubKey $valueNames $original
+        } else {
+            Write-SpatialRegistryState $registrySubKey $valueNames $original `
+                $RequestedMode $format $staticMask $dynamicObjects
+        }
 
         Write-Host "Windows rejected the public $RequestedMode switch; rebuilding the audio services."
         Restart-AudioServices
         $verified = Wait-SpatialPreflight $RequestedMode
         if (-not $verified.Ready) {
             Write-Warning 'The service restart was insufficient; trying device reenumeration.'
-            Write-SpatialRegistryState $registrySubKey $valueNames $original `
-                $RequestedMode $format $staticMask $dynamicObjects
+            if ($RequestedMode -eq 'Pcm') {
+                Write-NativePcmRegistryState $registrySubKey $valueNames $original
+            } else {
+                Write-SpatialRegistryState $registrySubKey $valueNames $original `
+                    $RequestedMode $format $staticMask $dynamicObjects
+            }
             Restart-SpatialDevice
             $verified = Wait-SpatialPreflight $RequestedMode
             if (-not $verified.Ready) {
@@ -350,6 +390,12 @@ $alreadyReady = Invoke-SpatialPreflight $Mode
 if ($alreadyReady.Ready) {
     $alreadyReady.Output | Write-Host
     Write-Host "$Mode spatial provider is already active."
+    return
+}
+
+if ($Mode -eq 'Pcm') {
+    Set-SpatialRegistryFallback $Mode
+    Write-Host 'Native PCM 7.1.4 mode selected and verified.'
     return
 }
 

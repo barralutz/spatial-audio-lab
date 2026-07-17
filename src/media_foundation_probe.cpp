@@ -1601,6 +1601,7 @@ void PlayLiveDtsXLayout(const double seconds,
 
     const auto startTime = std::chrono::steady_clock::now();
     const auto deadline = startTime + std::chrono::duration<double>(seconds);
+    const bool unlimited = seconds == 0.0;
     auto lastPayloadTime = startTime;
     try {
         while (true) {
@@ -1638,7 +1639,7 @@ void PlayLiveDtsXLayout(const double seconds,
                     maximumQueuedFrames = std::max(
                         maximumQueuedFrames, renderer.MinimumFramesAvailable(queue));
                 }
-                if (now >= deadline) acceptingInput = false;
+                if (!unlimited && now >= deadline) acceptingInput = false;
             }
 
             if (!acceptingInput && !decoderDrained) {

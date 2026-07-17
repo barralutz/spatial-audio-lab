@@ -437,7 +437,7 @@ void SpatialSignalTest(const double seconds, const std::wstring& filter,
         tones = {{AudioObjectType_Dynamic, 900.0f}};
     } else if (mode == L"silence" || mode.starts_with(L"impulse-")) {
         impulseTest = true;
-        tones = Spatial712Objects();
+        tones = Spatial714Objects();
         if (mode != L"silence") {
             const AudioObjectType impulseType = SpatialObjectTypeFromName(mode.substr(8));
             if (impulseType == AudioObjectType_None) {

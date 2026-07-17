@@ -39,6 +39,9 @@ void ProbeDtsXDecode(const std::filesystem::path& inputPath, std::size_t maxBurs
 void PlayLiveDtsXLayout(double seconds, const std::filesystem::path& layoutPath,
                         double gain, DWORD prebufferMilliseconds,
                         RendererLatencyMode latencyMode);
+void PlayLivePcmLayout(double seconds, const std::filesystem::path& layoutPath,
+                       double gain, DWORD prebufferMilliseconds,
+                       RendererLatencyMode latencyMode);
 void ProbeMediaTypes(const std::filesystem::path& inputPath);
 
 void AnalyzeFloatWave(const std::filesystem::path& inputPath);

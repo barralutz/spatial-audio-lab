@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <iostream>
 #include <memory>
@@ -15,6 +16,33 @@
 namespace dolby {
 
 namespace {
+
+struct MatCaptureReadHeaderV2 {
+    ULONG version;
+    ULONG headerBytes;
+    ULONG payloadBytes;
+    ULONG reserved;
+    ULONGLONG firstByteSequence;
+    ULONGLONG totalBytesWritten;
+    ULONGLONG droppedBytes;
+    GUID subFormat;
+    ULONGLONG formatChanges;
+};
+
+struct MatCaptureStatsV2 {
+    ULONG version;
+    ULONG capacityBytes;
+    ULONG availableBytes;
+    ULONG reserved;
+    ULONGLONG totalBytesWritten;
+    ULONGLONG totalBytesRead;
+    ULONGLONG droppedBytes;
+    GUID subFormat;
+    ULONGLONG formatChanges;
+};
+
+static_assert(offsetof(MAT_CAPTURE_READ_HEADER, SampleRate) == sizeof(MatCaptureReadHeaderV2));
+static_assert(offsetof(MAT_CAPTURE_STATS, SampleRate) == sizeof(MatCaptureStatsV2));
 
 Iec61937WaveFormat CarrierFormatForSubFormat(const GUID& subFormat) {
     if (IsEqualGUID(subFormat, kDts)) {
@@ -36,25 +64,71 @@ Iec61937WaveFormat CarrierFormatForSubFormat(const GUID& subFormat) {
     throw std::runtime_error("The capture driver reported an unsupported IEC 61937 subtype");
 }
 
+void PopulateLegacyFormat(const GUID& subFormat, MAT_CAPTURE_STATS& stats) {
+    if (IsEqualGUID(subFormat, GUID_NULL)) return;
+    const Iec61937WaveFormat format = CarrierFormatForSubFormat(subFormat);
+    stats.SampleRate = format.formatExt.Format.nSamplesPerSec;
+    stats.ChannelMask = format.formatExt.dwChannelMask;
+    stats.Channels = format.formatExt.Format.nChannels;
+    stats.BitsPerSample = format.formatExt.Format.wBitsPerSample;
+    stats.ValidBitsPerSample = format.formatExt.Samples.wValidBitsPerSample;
+    stats.BlockAlign = format.formatExt.Format.nBlockAlign;
+}
+
+void PopulateLegacyFormat(const GUID& subFormat, MAT_CAPTURE_READ_HEADER& header) {
+    MAT_CAPTURE_STATS stats{};
+    PopulateLegacyFormat(subFormat, stats);
+    header.SampleRate = stats.SampleRate;
+    header.ChannelMask = stats.ChannelMask;
+    header.Channels = stats.Channels;
+    header.BitsPerSample = stats.BitsPerSample;
+    header.ValidBitsPerSample = stats.ValidBitsPerSample;
+    header.BlockAlign = stats.BlockAlign;
+}
+
 } // namespace
 
 MAT_CAPTURE_STATS QueryMatCaptureStats(const HANDLE device) {
-    MAT_CAPTURE_STATS stats{};
+    alignas(MAT_CAPTURE_STATS) std::array<BYTE, sizeof(MAT_CAPTURE_STATS)> response{};
     DWORD returned = 0;
     if (!DeviceIoControl(device, IOCTL_MAT_CAPTURE_GET_STATS, nullptr, 0,
-                         &stats, sizeof(stats), &returned, nullptr)) {
+                         response.data(), static_cast<DWORD>(response.size()),
+                         &returned, nullptr)) {
         std::ostringstream message;
         message << "IOCTL_MAT_CAPTURE_GET_STATS failed (Win32 " << GetLastError() << ')';
         throw std::runtime_error(message.str());
     }
-    if (returned != sizeof(stats) || stats.Version != MAT_CAPTURE_PROTOCOL_VERSION) {
+    if (returned < sizeof(ULONG)) {
+        throw std::runtime_error("Capture driver returned truncated stats");
+    }
+    const ULONG version = *reinterpret_cast<const ULONG*>(response.data());
+    if (version == MAT_CAPTURE_PROTOCOL_VERSION && returned == sizeof(MAT_CAPTURE_STATS)) {
+        return *reinterpret_cast<const MAT_CAPTURE_STATS*>(response.data());
+    }
+    if (version == MAT_CAPTURE_PROTOCOL_VERSION_IEC61937 &&
+        returned == sizeof(MatCaptureStatsV2)) {
+        const auto& legacy = *reinterpret_cast<const MatCaptureStatsV2*>(response.data());
+        MAT_CAPTURE_STATS stats{};
+        stats.Version = legacy.version;
+        stats.CapacityBytes = legacy.capacityBytes;
+        stats.AvailableBytes = legacy.availableBytes;
+        stats.Reserved = legacy.reserved;
+        stats.TotalBytesWritten = legacy.totalBytesWritten;
+        stats.TotalBytesRead = legacy.totalBytesRead;
+        stats.DroppedBytes = legacy.droppedBytes;
+        stats.SubFormat = legacy.subFormat;
+        stats.FormatChanges = legacy.formatChanges;
+        PopulateLegacyFormat(stats.SubFormat, stats);
+        return stats;
+    }
+    {
         std::ostringstream message;
         message << "IEC 61937 capture driver returned incompatible stats (version="
-                << stats.Version << ", bytes=" << returned << ", expected version="
-                << MAT_CAPTURE_PROTOCOL_VERSION << ", expected bytes=" << sizeof(stats) << ')';
+                << version << ", bytes=" << returned << ", expected version="
+                << MAT_CAPTURE_PROTOCOL_VERSION << ", expected bytes="
+                << sizeof(MAT_CAPTURE_STATS) << ')';
         throw std::runtime_error(message.str());
     }
-    return stats;
 }
 
 WinHandle OpenMatCaptureDevice() {
@@ -87,17 +161,45 @@ MatCaptureReadView ReadMatCapture(const HANDLE device, std::vector<BYTE>& reques
         message << "IOCTL_MAT_CAPTURE_READ failed (Win32 " << GetLastError() << ')';
         throw std::runtime_error(message.str());
     }
-    if (returned < sizeof(MAT_CAPTURE_READ_HEADER)) {
-        throw std::runtime_error("IEC 61937 capture driver returned a truncated read header");
+    if (returned < sizeof(ULONG)) {
+        throw std::runtime_error("Capture driver returned a truncated read header");
     }
 
-    const auto* header = reinterpret_cast<const MAT_CAPTURE_READ_HEADER*>(request.data());
-    if (header->Version != MAT_CAPTURE_PROTOCOL_VERSION ||
-        header->HeaderBytes < sizeof(MAT_CAPTURE_READ_HEADER) ||
-        static_cast<std::uint64_t>(header->HeaderBytes) + header->PayloadBytes > returned) {
-        throw std::runtime_error("IEC 61937 capture driver returned an invalid read result");
+    const ULONG version = *reinterpret_cast<const ULONG*>(request.data());
+    if (version == MAT_CAPTURE_PROTOCOL_VERSION) {
+        if (returned < sizeof(MAT_CAPTURE_READ_HEADER)) {
+            throw std::runtime_error("Capture driver returned a truncated v3 read header");
+        }
+        const auto* header = reinterpret_cast<const MAT_CAPTURE_READ_HEADER*>(request.data());
+        if (header->HeaderBytes < sizeof(MAT_CAPTURE_READ_HEADER) ||
+            static_cast<std::uint64_t>(header->HeaderBytes) + header->PayloadBytes > returned) {
+            throw std::runtime_error("Capture driver returned an invalid v3 read result");
+        }
+        return {*header, request.data() + header->HeaderBytes};
     }
-    return {*header, request.data() + header->HeaderBytes};
+    if (version == MAT_CAPTURE_PROTOCOL_VERSION_IEC61937) {
+        if (returned < sizeof(MatCaptureReadHeaderV2)) {
+            throw std::runtime_error("Capture driver returned a truncated v2 read header");
+        }
+        const auto& legacy = *reinterpret_cast<const MatCaptureReadHeaderV2*>(request.data());
+        if (legacy.headerBytes < sizeof(MatCaptureReadHeaderV2) ||
+            static_cast<std::uint64_t>(legacy.headerBytes) + legacy.payloadBytes > returned) {
+            throw std::runtime_error("Capture driver returned an invalid v2 read result");
+        }
+        MAT_CAPTURE_READ_HEADER header{};
+        header.Version = legacy.version;
+        header.HeaderBytes = legacy.headerBytes;
+        header.PayloadBytes = legacy.payloadBytes;
+        header.Reserved = legacy.reserved;
+        header.FirstByteSequence = legacy.firstByteSequence;
+        header.TotalBytesWritten = legacy.totalBytesWritten;
+        header.DroppedBytes = legacy.droppedBytes;
+        header.SubFormat = legacy.subFormat;
+        header.FormatChanges = legacy.formatChanges;
+        PopulateLegacyFormat(header.SubFormat, header);
+        return {header, request.data() + legacy.headerBytes};
+    }
+    throw std::runtime_error("Capture driver returned an unsupported protocol version");
 }
 
 void CaptureIec61937Ring(const double seconds, const std::filesystem::path& outputPath,

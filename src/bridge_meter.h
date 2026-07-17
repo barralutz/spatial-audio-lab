@@ -11,6 +11,7 @@ namespace dolby {
 enum class BridgeMeterMode : std::uint32_t {
     Mat = 1,
     DtsX = 2,
+    Pcm = 3,
 };
 
 class BridgeMeterPublisher {

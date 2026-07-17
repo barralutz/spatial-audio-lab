@@ -3,7 +3,8 @@
 Este repositorio investiga la captura y el renderizado de Dolby Atmos para obtener una salida
 analogica configurable. La ruta de juegos ya reproduce Dolby MAT como 7.1.4 mediante tres
 dispositivos WASAPI; la ruta de peliculas E-AC-3 JOC y TrueHD Atmos conserva por ahora la salida
-7.1.2. El endpoint virtual SysVAD recibe Dolby MAT 2.1 antes de HDMI.
+7.1.2. El endpoint virtual SysVAD recibe Dolby MAT 2.1 antes de HDMI. Tambien existe un tercer modo
+experimental que transporta una cama PCM 7.1.4 sin codificador Dolby o DTS.
 
 ## Conclusion tecnica
 
@@ -75,23 +76,25 @@ de reproduccion activos en un selector, permite actualizar la lista despues de c
 conserva los filtros de dispositivos desconectados marcandolos como no disponibles. `Restablecer
 posiciones` devuelve azimut y elevacion al esquema 7.1.4 estandar sin cambiar niveles, endpoints ni
 retardos.
-La pestaña `Puentes` selecciona `Dolby MAT` o `DTS:X`, inicia y detiene el script correspondiente,
-controla ganancia, prebuffer y duracion, muestra el PID activo, abre su registro y ofrece acceso
-directo a la configuracion de sonido espacial. Con un puente activo se puede seleccionar el otro
-codec y pulsar `Cambiar`; el script detiene el proceso anterior, reconfigura y valida el endpoint y
-arranca el nuevo puente. `Detener` sigue dirigido al proceso activo. El puente se ejecuta como
+
+La pestaña `Puentes` selecciona `Dolby MAT`, `DTS:X` o `PCM 7.1.4`, inicia y detiene el script
+correspondiente, controla ganancia y prebuffer, muestra el PID activo, abre su registro y ofrece
+acceso directo a la configuracion de sonido espacial. Con un puente activo se puede seleccionar el
+otro modo y pulsar `Cambiar`; el script detiene el proceso anterior, reconfigura y valida el endpoint
+y arranca el nuevo puente. `Detener` sigue dirigido al proceso activo. El puente se ejecuta como
 proceso independiente y continua activo al cerrar el editor; si hace falta elevacion, Windows
 solicita UAC al ejecutar el script correspondiente.
 
-Antes de iniciar, ambos scripts verifican el carrier configurado y abren durante 250 ms un stream
+Antes de iniciar, los scripts verifican el carrier configurado y abren durante 250 ms un stream
 espacial silencioso. Atmos solo se acepta con MAT y la firma observada del renderer Dolby
-(`0xC1FFE`, 20 objetos); DTS:X exige E1/E2 y su firma (`0xFFFFE`, 32 objetos). Esto evita iniciar un
-puente que quedaria mudo cuando `Formato` y el renderer espacial no coinciden.
+(`0xC1FFE`, 20 objetos); DTS:X exige E1/E2 y su firma (`0xFFFFE`, 32 objetos); PCM exige doce
+canales/48 kHz, mascara `0x2D63F`, el proveedor espacial desactivado y cero objetos dinamicos. Esto
+evita iniciar un puente que quedaria mudo cuando `Formato` y el renderer espacial no coinciden.
 
 `tools\Set-SpatialProvider.ps1` automatiza el cambio. Primero solicita el formato mediante
 `SpatialAudioDeviceConfiguration`. En la compilacion actual de Windows esa API devuelve
 `AccessDenied` o `NotSupportedOnAudioEndpoint` para este endpoint SysVAD, aunque ambos proveedores
-estan instalados. La ruta de recuperacion conserva los cuatro valores espaciales anteriores,
+estan instalados. La ruta de recuperacion conserva los cinco valores espaciales anteriores,
 configura GUID, mascara, numero de objetos y carrier del proveedor solicitado, y reconstruye
 `AudioEndpointBuilder`/`Audiosrv`. Windows vuelve con MAT 2.1 Profile 3 para Atmos o DTS:X E1 sin
 reiniciar el dispositivo. `pnputil /restart-device ROOT\MEDIA\0001` queda como segunda opcion si
@@ -113,7 +116,7 @@ endpoints, por lo que permiten distinguir si el contenido realmente activa `TFL/
 puente publica los niveles por memoria compartida, el editor los actualiza cada 100 ms y los limpia
 si no recibe datos nuevos durante 500 ms.
 
-El selector de latencia ofrece tres perfiles comunes a MAT y DTS:X: `Seguro` usa el periodo
+El selector de latencia ofrece tres perfiles comunes a MAT, DTS:X y PCM: `Seguro` usa el periodo
 compartido predeterminado y 80 ms de prebuffer, `Equilibrado` solicita un periodo intermedio y usa
 40 ms, y `Bajo` solicita el minimo y usa 20 ms. El renderer consulta cada endpoint mediante
 `IAudioClient3`, respeta los multiplos permitidos por su driver y vuelve al inicializador WASAPI
@@ -142,18 +145,47 @@ equivale a 22 ms reales aunque el control solicite 20 ms.
   'SinkDescription Sample' 714
 
 # Requiere el arranque F7 y el driver SysVAD de prueba.
-.\tools\Start-Live714.ps1 -DurationSeconds 3600 -Gain 0.25 `
+.\tools\Start-Live714.ps1 -Gain 0.25 `
   -LatencyMode Balanced -PrebufferMilliseconds 40
 .\tools\Stop-Live714.ps1
 
-.\tools\Start-LiveDtsX714.ps1 -DurationSeconds 3600 -Gain 0.25 `
+.\tools\Start-LiveDtsX714.ps1 -Gain 0.25 `
   -LatencyMode Balanced -PrebufferMilliseconds 40
 .\tools\Stop-LiveDtsX714.ps1
+
+.\tools\Start-LivePcm714.ps1 -Gain 0.25 `
+  -LatencyMode Balanced -PrebufferMilliseconds 40
+.\tools\Stop-LivePcm714.ps1
 ```
 
 `live-layout` es actualmente la ruta configurable para MAT de juegos. `DolbyPlayer` todavia
 renderiza peliculas a la pareja Realtek 8+2; compartir el mismo renderer 7.1.4 es la siguiente
 integracion, no una capacidad que deba asumirse ya terminada.
+
+### Renderer propio PCM 7.1.4
+
+El modo `live-pcm-layout` evita tanto MAT como DTS:X. SysVAD anuncia PCM16 de doce canales a
+48 kHz con mascara `0x2D63F` (`FL, FR, FC, LFE, BL, BR, SL, SR, TFL, TFR, TBL, TBR`), lo copia al
+ring v3 junto con frecuencia, mascara, profundidad y alineacion, y el proceso de usuario lo entrega
+directamente a `MultiEndpointRenderer`. No hay encoder, decoder ni licencia de codec en esta ruta;
+se conservan trims, retardos, medidores y correccion de deriva de los tres DACs.
+
+Los tres puentes 7.1.4 se ejecutan de forma indefinida y solo terminan al pulsar `Detener`, al
+cambiar de modo o al invocar su script `Stop-*`. El parametro opcional `-DurationSeconds` admite una
+duracion positiva de hasta una hora para pruebas; su valor predeterminado `0` significa ilimitado.
+
+Esta alternativa es una cama **estatica** 7.1.4 de Windows Spatial Sound. Con el proveedor espacial
+desactivado, `GetMaxDynamicObjectCount` devuelve cero. Un juego que use el bed 7.1.4 puede conservar
+los cuatro canales superiores; uno que requiera objetos dinamicos puede degradar a 7.1 o rechazar el
+stream. No es todavia un proveedor propio de objetos: Windows exige que la app que registra el
+formato sea su propietaria, y Dolby/DTS lo implementan mediante extensiones MFT empaquetadas cuyo
+contrato completo con el motor espacial no esta documentado. Registrar un GUID y modificar el
+dropdown sin implementar ese contrato seria una falsa compatibilidad.
+
+El paquete `oem123.inf`, version `2.55.40.516` del 17/07/2026, contiene el endpoint PCM 7.1.4 y el
+ring v3. Windows lo dejo staged y marco el dispositivo con reinicio pendiente; la primera validacion
+requiere reiniciar con F7. Despues del arranque, el recorrido controlado es iniciar el puente PCM y
+ejecutar `spatial-test ... 714`: los doce medidores deben responder sin etapas Dolby/DTS.
 
 ## Salida GPU dedicada
 
@@ -374,7 +406,7 @@ de MAT. Esto permite cambiar temporalmente de dispositivo sin tener que reinicia
 
 #### Estado de DTS:X para juegos
 
-El protocolo del ring es ahora v2 y conserva el subtipo KS junto con cada lectura. El driver
+El protocolo del ring v2 conserva el subtipo KS junto con cada lectura. El driver
 `oem121.inf` captura MAT 2.0/2.1 y tambien IEC 61937 DTS, DTS-HD y DTS:X E1/E2; al cambiar el formato
 reinicia las secuencias para no mezclar carriers. Con `DTS:X para centro de entretenimiento` activo,
 una escena espacial 7.1.4 produjo 375 rafagas E1 validas, `Pc=0x0411`, sin gaps ni descartes. Los
@@ -423,7 +455,7 @@ una cama estatica 7.1.4, por lo que la ruta analogica no interpreta metadata pri
   '.\captures\dtsx-spatial-714.wav' 32 pcm '.\captures\dtsx-decoded-71.wav'
 
 # Puente de juegos DTS:X E1 a las salidas del perfil 7.1.4.
-.\tools\Start-LiveDtsX714.ps1 -DurationSeconds 3600 -Gain 0.25 `
+.\tools\Start-LiveDtsX714.ps1 -Gain 0.25 `
   -LatencyMode Balanced -PrebufferMilliseconds 40
 .\tools\Stop-LiveDtsX714.ps1
 ```
@@ -500,7 +532,7 @@ Capturas de referencia:
 - `src/wave_io.*`: lectura y escritura RIFF/WAVE compartida por capturas y extractores.
 - `src/capture_commands.cpp`: pruebas de transporte, Spatial Sound y loopback WASAPI.
 - `src/mat_capture_client.*`: cliente IOCTL del ring `\\.\DolbyDecoderMat`.
-- `src/bridge_meter.*`: telemetria RMS/pico por canal compartida por los puentes MAT y DTS:X.
+- `src/bridge_meter.*`: telemetria RMS/pico por canal compartida por los tres puentes.
 - `src/media_foundation_probe.cpp`: enumeracion de MFTs, licencia, decoder incremental y puente
   analogico DTS:X.
 - `src/spatial_audio_sample.*`: implementacion caller-owned de muestras y objetos espaciales MF.
@@ -508,12 +540,14 @@ Capturas de referencia:
 - `src/mat_format.*`: operaciones comunes sobre transporte y metadata MAT.
 - `src/mat_analysis.cpp`: diagnosticos del carrier, posiciones de objetos y PCM multicanal.
 - `src/mat_pipeline.cpp`: decodificador MAT 7.1.2 compatible y ruta configurable en vivo.
+- `src/pcm_pipeline.cpp`: transporte PCM 7.1.4 nativo desde el ring v3 al renderer configurable.
 - `src/speaker_layout.*`: parser/validador de perfiles y paneo segun posiciones fisicas.
 - `src/multi_endpoint_renderer.*`: WASAPI multidispositivo, colas, relojes y resampling adaptativo.
 - `configs/realtek-c1u-714.ini`: cama Realtek 7.1, techo frontal C-1U y techo trasero Realtek.
 - `tools/SpeakerLayoutEditor`: editor grafico WPF del perfil, salidas, puentes y medidores de canal.
 - `tools/Start-Live714.ps1` / `tools/Stop-Live714.ps1`: administran el puente MAT 7.1.4.
 - `tools/Start-LiveDtsX714.ps1` / `tools/Stop-LiveDtsX714.ps1`: administran el puente DTS:X 7.1.4.
+- `tools/Start-LivePcm714.ps1` / `tools/Stop-LivePcm714.ps1`: administran el puente PCM propio.
 - `tools/Test-SpatialProvider.ps1`: preflight de carrier, renderer y stream espacial.
 - `tools/Repair-DolbySpatialProvider.ps1`: repara el registro de Dolby Access y reinicia audio.
 - `build/dolby-probe.exe`: binario Windows ya compilado en esta maquina.
@@ -582,7 +616,7 @@ cd C:\Users\barra\Documents\Desarrollo\dolbyDecoder
 .\build\dolby-probe.exe analyze-mat-layout `
   '.\captures\mat21-spatial-dynamic-fixed-above.wav' `
   '.\configs\realtek-c1u-714.ini'
-.\tools\Start-Live714.ps1 -DurationSeconds 3600 -Gain 0.25
+.\tools\Start-Live714.ps1 -Gain 0.25
 .\tools\Stop-Live714.ps1
 .\build\dolby-probe.exe capture-process 25 (Get-Process bf1).Id `
   '.\captures\battlefield-1-native-atmos-process.wav'

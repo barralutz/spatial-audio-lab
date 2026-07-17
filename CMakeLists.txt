@@ -14,6 +14,7 @@ add_executable(dolby-probe
   src/mat_format.cpp
   src/mat_pipeline.cpp
   src/multi_endpoint_renderer.cpp
+  src/pcm_pipeline.cpp
   src/speaker_layout.cpp
   src/spatial_audio_sample.cpp
   src/wave_io.cpp

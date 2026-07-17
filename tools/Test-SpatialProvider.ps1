@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('Atmos', 'DtsX')]
+    [ValidateSet('Atmos', 'DtsX', 'Pcm')]
     [string]$Mode,
 
     [string]$EndpointFilter = 'SinkDescription Sample'
@@ -21,14 +21,18 @@ $currentFormat = $formatOutput | Where-Object { $_ -match '^\s*device current:' 
     Select-Object -First 1
 $formatMatches = if ($Mode -eq 'Atmos') {
     $currentFormat -match 'Dolby (MLP / MAT 1\.0|MAT 2\.)'
-} else {
+} elseif ($Mode -eq 'DtsX') {
     $currentFormat -match 'DTS:X E[12]'
+} else {
+    $currentFormat -match '12ch, 48000 Hz, 16 bit, block=24, mask=0x2D63F, PCM'
 }
 if (-not $formatMatches) {
     $wanted = if ($Mode -eq 'Atmos') {
         'Dolby Atmos para el centro de entretenimiento'
-    } else {
+    } elseif ($Mode -eq 'DtsX') {
         'DTS:X para centro de entretenimiento'
+    } else {
+        'PCM nativo 7.1.4'
     }
     throw @"
 El carrier activo no corresponde a $Mode ($currentFormat).
@@ -49,8 +53,10 @@ $signature = $spatialOutput | Where-Object { $_ -match 'Native static mask:' } |
     Select-Object -First 1
 $signatureMatches = if ($Mode -eq 'Atmos') {
     $signature -match '0xC1FFE, dynamic objects: 20'
-} else {
+} elseif ($Mode -eq 'DtsX') {
     $signature -match '0xFFFFE, dynamic objects: 32'
+} else {
+    $signature -match 'dynamic objects: 0'
 }
 if (-not $signatureMatches) {
     throw "El carrier esta activo, pero la firma espacial no corresponde a $Mode ($signature)."

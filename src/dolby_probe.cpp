@@ -66,6 +66,8 @@ void PrintUsage() {
            L"[safe|balanced|low]\n\n"
         << L"dolby-probe live-dtsx-layout [seconds] [layout.ini] [gain] [prebuffer-ms] "
            L"[safe|balanced|low]\n\n"
+        << L"dolby-probe live-pcm-layout [seconds] [layout.ini] [gain] [prebuffer-ms] "
+           L"[safe|balanced|low]\n\n"
         << L"An empty endpoint filter selects the default render endpoint.\n";
 }
 } // namespace dolby
@@ -225,7 +227,7 @@ int wmain(const int argc, wchar_t** argv) {
         }
 
         if (command == L"live-layout") {
-            const double seconds = argc >= 3 ? std::stod(argv[2]) : 60.0;
+            const double seconds = argc >= 3 ? std::stod(argv[2]) : 0.0;
             const std::filesystem::path layoutPath =
                 argc >= 4 ? argv[3] : L"configs\\realtek-c1u-714.ini";
             const double gain = argc >= 5 ? std::stod(argv[4]) : 0.25;
@@ -234,10 +236,11 @@ int wmain(const int argc, wchar_t** argv) {
             const RendererLatencyMode latencyMode = argc >= 7
                 ? ParseRendererLatencyMode(argv[6])
                 : RendererLatencyMode::Balanced;
-            if (seconds <= 0.0 || seconds > 3'600.0 || gain < 0.0 || gain > 1.0 ||
+            if (seconds < 0.0 || seconds > 3'600.0 || gain < 0.0 || gain > 1.0 ||
                 prebufferMilliseconds < 20 || prebufferMilliseconds > 500) {
                 throw std::runtime_error(
-                    "live-layout requires 0 < seconds <= 3600, 0 <= gain <= 1 and "
+                    "live-layout requires 0 <= seconds <= 3600 (0 is unlimited), "
+                    "0 <= gain <= 1 and "
                     "20 <= prebuffer-ms <= 500");
             }
             PlayLiveMatLayout(
@@ -246,7 +249,7 @@ int wmain(const int argc, wchar_t** argv) {
         }
 
         if (command == L"live-dtsx-layout") {
-            const double seconds = argc >= 3 ? std::stod(argv[2]) : 60.0;
+            const double seconds = argc >= 3 ? std::stod(argv[2]) : 0.0;
             const std::filesystem::path layoutPath =
                 argc >= 4 ? argv[3] : L"configs\\realtek-c1u-714.ini";
             const double gain = argc >= 5 ? std::stod(argv[4]) : 0.25;
@@ -255,13 +258,36 @@ int wmain(const int argc, wchar_t** argv) {
             const RendererLatencyMode latencyMode = argc >= 7
                 ? ParseRendererLatencyMode(argv[6])
                 : RendererLatencyMode::Balanced;
-            if (seconds <= 0.0 || seconds > 3'600.0 || gain < 0.0 || gain > 1.0 ||
+            if (seconds < 0.0 || seconds > 3'600.0 || gain < 0.0 || gain > 1.0 ||
                 prebufferMilliseconds < 20 || prebufferMilliseconds > 500) {
                 throw std::runtime_error(
-                    "live-dtsx-layout requires 0 < seconds <= 3600, 0 <= gain <= 1 and "
+                    "live-dtsx-layout requires 0 <= seconds <= 3600 (0 is unlimited), "
+                    "0 <= gain <= 1 and "
                     "20 <= prebuffer-ms <= 500");
             }
             PlayLiveDtsXLayout(
+                seconds, layoutPath, gain, prebufferMilliseconds, latencyMode);
+            return 0;
+        }
+
+        if (command == L"live-pcm-layout") {
+            const double seconds = argc >= 3 ? std::stod(argv[2]) : 0.0;
+            const std::filesystem::path layoutPath =
+                argc >= 4 ? argv[3] : L"configs\\realtek-c1u-714.ini";
+            const double gain = argc >= 5 ? std::stod(argv[4]) : 0.25;
+            const DWORD prebufferMilliseconds =
+                argc >= 6 ? static_cast<DWORD>(std::stoul(argv[5])) : 40;
+            const RendererLatencyMode latencyMode = argc >= 7
+                ? ParseRendererLatencyMode(argv[6])
+                : RendererLatencyMode::Balanced;
+            if (seconds < 0.0 || seconds > 3'600.0 || gain < 0.0 || gain > 1.0 ||
+                prebufferMilliseconds < 20 || prebufferMilliseconds > 500) {
+                throw std::runtime_error(
+                    "live-pcm-layout requires 0 <= seconds <= 3600 (0 is unlimited), "
+                    "0 <= gain <= 1 and "
+                    "20 <= prebuffer-ms <= 500");
+            }
+            PlayLivePcmLayout(
                 seconds, layoutPath, gain, prebufferMilliseconds, latencyMode);
             return 0;
         }

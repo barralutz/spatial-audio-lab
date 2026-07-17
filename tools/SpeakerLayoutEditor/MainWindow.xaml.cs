@@ -26,7 +26,8 @@ sealed record PhysicalDestinationChoice(OutputRouteDefinition Output,
 
 enum BridgeMode {
     Mat,
-    DtsX
+    DtsX,
+    Pcm
 }
 
 enum BridgeLatencyMode {
@@ -258,6 +259,7 @@ public partial class MainWindow : Window {
     }
 
     BridgeMode SelectedBridgeMode =>
+        PcmModeButton.IsChecked == true ? BridgeMode.Pcm :
         DtsXModeButton.IsChecked == true ? BridgeMode.DtsX : BridgeMode.Mat;
 
     BridgeLatencyMode SelectedBridgeLatencyMode =>
@@ -268,26 +270,37 @@ public partial class MainWindow : Window {
     static string BridgeName(BridgeMode mode) => mode switch {
         BridgeMode.Mat => "Dolby MAT",
         BridgeMode.DtsX => "DTS:X",
+        BridgeMode.Pcm => "PCM propio 7.1.4",
         _ => throw new ArgumentOutOfRangeException(nameof(mode))
     };
 
     static string BridgeStartScript(BridgeMode mode) => mode switch {
         BridgeMode.Mat => "Start-Live714.ps1",
         BridgeMode.DtsX => "Start-LiveDtsX714.ps1",
+        BridgeMode.Pcm => "Start-LivePcm714.ps1",
         _ => throw new ArgumentOutOfRangeException(nameof(mode))
     };
 
     static string BridgeStopScript(BridgeMode mode) => mode switch {
         BridgeMode.Mat => "Stop-Live714.ps1",
         BridgeMode.DtsX => "Stop-LiveDtsX714.ps1",
+        BridgeMode.Pcm => "Stop-LivePcm714.ps1",
         _ => throw new ArgumentOutOfRangeException(nameof(mode))
     };
 
-    string BridgePidPath(BridgeMode mode) => IOPath.Combine(
-        repoRoot, "captures", mode == BridgeMode.Mat ? "live-714.pid" : "live-dtsx-714.pid");
+    string BridgePidPath(BridgeMode mode) => IOPath.Combine(repoRoot, "captures", mode switch {
+        BridgeMode.Mat => "live-714.pid",
+        BridgeMode.DtsX => "live-dtsx-714.pid",
+        BridgeMode.Pcm => "live-pcm-714.pid",
+        _ => throw new ArgumentOutOfRangeException(nameof(mode))
+    });
 
-    string BridgeLogPath(BridgeMode mode) => IOPath.Combine(
-        repoRoot, "captures", mode == BridgeMode.Mat ? "live-714.log" : "live-dtsx-714.log");
+    string BridgeLogPath(BridgeMode mode) => IOPath.Combine(repoRoot, "captures", mode switch {
+        BridgeMode.Mat => "live-714.log",
+        BridgeMode.DtsX => "live-dtsx-714.log",
+        BridgeMode.Pcm => "live-pcm-714.log",
+        _ => throw new ArgumentOutOfRangeException(nameof(mode))
+    });
 
     void BridgeControlChanged(object sender, RoutedPropertyChangedEventArgs<double> e) =>
         UpdateBridgeControlLabels();
@@ -304,11 +317,9 @@ public partial class MainWindow : Window {
     }
 
     void UpdateBridgeControlLabels() {
-        if (BridgeGainValue is null || BridgePrebufferValue is null ||
-            BridgeDurationValue is null) return;
+        if (BridgeGainValue is null || BridgePrebufferValue is null) return;
         BridgeGainValue.Text = BridgeGainSlider.Value.ToString("0.00", CultureInfo.InvariantCulture);
         BridgePrebufferValue.Text = $"{Math.Round(BridgePrebufferSlider.Value):0} ms";
-        BridgeDurationValue.Text = $"{Math.Round(BridgeDurationSlider.Value):0} min";
     }
 
     void BridgeModeClick(object sender, RoutedEventArgs e) {
@@ -319,6 +330,7 @@ public partial class MainWindow : Window {
     void SelectBridgeMode(BridgeMode mode) {
         MatModeButton.IsChecked = mode == BridgeMode.Mat;
         DtsXModeButton.IsChecked = mode == BridgeMode.DtsX;
+        PcmModeButton.IsChecked = mode == BridgeMode.Pcm;
     }
 
     bool TryGetLiveBridgeProcess(BridgeMode mode, out Process? process) {
@@ -361,7 +373,7 @@ public partial class MainWindow : Window {
 
         if (!bridgeCommandRunning) {
             if (runningModes.Count > 1) {
-                BridgeStatusText.Text = "MAT y DTS:X activos";
+                BridgeStatusText.Text = "Varios puentes activos";
             } else if (runningModes.Count == 1 &&
                        TryGetLiveBridgeProcess(statusMode, out Process? process)) {
                 using (process) {
@@ -389,9 +401,9 @@ public partial class MainWindow : Window {
         }
         MatModeButton.IsEnabled = !bridgeCommandRunning;
         DtsXModeButton.IsEnabled = !bridgeCommandRunning;
+        PcmModeButton.IsEnabled = !bridgeCommandRunning;
         BridgeGainSlider.IsEnabled = !anyRunning && !bridgeCommandRunning;
         BridgePrebufferSlider.IsEnabled = !anyRunning && !bridgeCommandRunning;
-        BridgeDurationSlider.IsEnabled = !anyRunning && !bridgeCommandRunning;
         SafeLatencyButton.IsEnabled = !anyRunning && !bridgeCommandRunning;
         BalancedLatencyButton.IsEnabled = !anyRunning && !bridgeCommandRunning;
         LowLatencyButton.IsEnabled = !anyRunning && !bridgeCommandRunning;
@@ -404,9 +416,7 @@ public partial class MainWindow : Window {
         if (!SaveProfile(currentPath)) return;
 
         BridgeMode mode = SelectedBridgeMode;
-        int durationSeconds = (int)Math.Round(BridgeDurationSlider.Value) * 60;
         string[] arguments = [
-            "-DurationSeconds", durationSeconds.ToString(CultureInfo.InvariantCulture),
             "-Gain", BridgeGainSlider.Value.ToString("0.###", CultureInfo.InvariantCulture),
             "-PrebufferMilliseconds",
             ((int)Math.Round(BridgePrebufferSlider.Value)).ToString(CultureInfo.InvariantCulture),
