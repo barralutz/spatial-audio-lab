@@ -12,6 +12,15 @@
 
 namespace dolby {
 
+enum class RendererLatencyMode {
+    Safe,
+    Balanced,
+    Low,
+};
+
+RendererLatencyMode ParseRendererLatencyMode(std::wstring_view value);
+std::wstring_view RendererLatencyModeName(RendererLatencyMode mode);
+
 class InterleavedPcmQueue {
 public:
     explicit InterleavedPcmQueue(std::size_t channels);
@@ -40,11 +49,20 @@ struct EndpointRenderStats {
     double resampleAdjustmentPpm{};
     double phaseErrorMilliseconds{};
     double maximumPhaseErrorMilliseconds{};
+    double bufferMilliseconds{};
+    double streamLatencyMilliseconds{};
+    std::uint32_t bufferFrames{};
+    std::uint32_t defaultPeriodFrames{};
+    std::uint32_t minimumPeriodFrames{};
+    std::uint32_t selectedPeriodFrames{};
+    bool lowLatencyApi{};
+    bool mmcssEnabled{};
 };
 
 class MultiEndpointRenderer {
 public:
-    MultiEndpointRenderer(const SpeakerLayout& layout, double gain);
+    MultiEndpointRenderer(const SpeakerLayout& layout, double gain,
+                          RendererLatencyMode latencyMode = RendererLatencyMode::Safe);
     ~MultiEndpointRenderer();
 
     MultiEndpointRenderer(const MultiEndpointRenderer&) = delete;
@@ -57,6 +75,7 @@ public:
                  DWORD timeoutMilliseconds = 2);
     void DiscardConsumed(InterleavedPcmQueue& queue) const;
     std::uint64_t MinimumFramesAvailable(const InterleavedPcmQueue& queue) const;
+    std::uint32_t MaximumBufferFrames() const;
     bool IsDrained(const InterleavedPcmQueue& queue) const;
     bool IsStarted() const;
     void Stop();
@@ -72,7 +91,8 @@ private:
 void TestSpeakerLayout(double seconds,
                        const SpeakerLayout& layout,
                        double gain,
-                       std::wstring_view speakerName = {});
+                       std::wstring_view speakerName = {},
+                       RendererLatencyMode latencyMode = RendererLatencyMode::Safe);
 void PrintEndpointRenderStats(const std::vector<EndpointRenderStats>& stats);
 
 } // namespace dolby

@@ -1556,12 +1556,13 @@ void ProbeDtsXDecode(const std::filesystem::path& inputPath, const std::size_t m
 void PlayLiveDtsXLayout(const double seconds,
                         const std::filesystem::path& layoutPath,
                         const double gain,
-                        const DWORD prebufferMilliseconds) {
+                        const DWORD prebufferMilliseconds,
+                        const RendererLatencyMode latencyMode) {
     MediaFoundationSession mediaFoundation;
     const SpeakerLayout layout = LoadSpeakerLayout(layoutPath);
     WinHandle device = OpenMatCaptureDevice();
     BridgeMeterPublisher meters(layout, BridgeMeterMode::DtsX);
-    MultiEndpointRenderer renderer(layout, gain);
+    MultiEndpointRenderer renderer(layout, gain, latencyMode);
     DtsXSpatialDecoder decoder(layout);
     ResetMatCapture(device.Get());
     DtsXCarrierFramer framer;
@@ -1569,8 +1570,10 @@ void PlayLiveDtsXLayout(const double seconds,
 
     constexpr std::size_t requestPayloadBytes = 256U * 1024U;
     std::vector<BYTE> request(sizeof(MAT_CAPTURE_READ_HEADER) + requestPayloadBytes);
-    const std::uint64_t prebufferFrames =
-        std::max<std::uint64_t>(960, static_cast<std::uint64_t>(prebufferMilliseconds) * 48);
+    const std::uint64_t prebufferFrames = std::max<std::uint64_t>(
+        std::max<std::uint64_t>(
+            960, static_cast<std::uint64_t>(prebufferMilliseconds) * 48),
+        renderer.MaximumBufferFrames());
     std::uint64_t expectedSequence = 0;
     std::uint64_t sequenceGaps = 0;
     std::uint64_t ringBytes = 0;
@@ -1584,11 +1587,17 @@ void PlayLiveDtsXLayout(const double seconds,
                << L", outputs=" << layout.outputs.size() << L"\n";
     for (const EndpointRenderStats& output : renderer.Stats()) {
         std::wcout << L"  " << output.routeName << L": " << output.endpointName
-                   << (output.isMaster ? L" [master]" : L"") << L"\n";
+                   << (output.isMaster ? L" [master]" : L"")
+                   << L", buffer=" << std::fixed << std::setprecision(2)
+                   << output.bufferMilliseconds << L" ms, period="
+                   << output.selectedPeriodFrames << L" frames"
+                   << (output.lowLatencyApi ? L" [IAudioClient3]" : L"") << L"\n";
     }
     std::wcout << L"  decoder=DTSXDecoder spatial 7.1.4, gain=" << std::fixed
                << std::setprecision(2) << gain << L", prebuffer="
-               << prebufferMilliseconds << L" ms\n" << std::flush;
+               << prebufferMilliseconds << L" ms, latency="
+               << RendererLatencyModeName(latencyMode) << L", effective="
+               << std::setprecision(2) << prebufferFrames / 48.0 << L" ms\n" << std::flush;
 
     const auto startTime = std::chrono::steady_clock::now();
     const auto deadline = startTime + std::chrono::duration<double>(seconds);

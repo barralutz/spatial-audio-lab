@@ -29,6 +29,12 @@ enum BridgeMode {
     DtsX
 }
 
+enum BridgeLatencyMode {
+    Safe,
+    Balanced,
+    Low
+}
+
 public partial class MainWindow : Window {
     static readonly Color[] RouteColors = [
         Color.FromRgb(52, 120, 165),
@@ -253,6 +259,11 @@ public partial class MainWindow : Window {
     BridgeMode SelectedBridgeMode =>
         DtsXModeButton.IsChecked == true ? BridgeMode.DtsX : BridgeMode.Mat;
 
+    BridgeLatencyMode SelectedBridgeLatencyMode =>
+        SafeLatencyButton.IsChecked == true ? BridgeLatencyMode.Safe :
+        LowLatencyButton.IsChecked == true ? BridgeLatencyMode.Low :
+        BridgeLatencyMode.Balanced;
+
     static string BridgeName(BridgeMode mode) => mode switch {
         BridgeMode.Mat => "Dolby MAT",
         BridgeMode.DtsX => "DTS:X",
@@ -279,6 +290,17 @@ public partial class MainWindow : Window {
 
     void BridgeControlChanged(object sender, RoutedPropertyChangedEventArgs<double> e) =>
         UpdateBridgeControlLabels();
+
+    void BridgeLatencyChecked(object sender, RoutedEventArgs e) {
+        if (BridgePrebufferSlider is null) return;
+        BridgePrebufferSlider.Value = SelectedBridgeLatencyMode switch {
+            BridgeLatencyMode.Safe => 80,
+            BridgeLatencyMode.Balanced => 40,
+            BridgeLatencyMode.Low => 20,
+            _ => throw new ArgumentOutOfRangeException()
+        };
+        UpdateBridgeControlLabels();
+    }
 
     void UpdateBridgeControlLabels() {
         if (BridgeGainValue is null || BridgePrebufferValue is null ||
@@ -358,6 +380,9 @@ public partial class MainWindow : Window {
         BridgeGainSlider.IsEnabled = !anyRunning && !bridgeCommandRunning;
         BridgePrebufferSlider.IsEnabled = !anyRunning && !bridgeCommandRunning;
         BridgeDurationSlider.IsEnabled = !anyRunning && !bridgeCommandRunning;
+        SafeLatencyButton.IsEnabled = !anyRunning && !bridgeCommandRunning;
+        BalancedLatencyButton.IsEnabled = !anyRunning && !bridgeCommandRunning;
+        LowLatencyButton.IsEnabled = !anyRunning && !bridgeCommandRunning;
         BridgeOpenLogButton.IsEnabled = File.Exists(BridgeLogPath(statusMode));
     }
 
@@ -376,6 +401,7 @@ public partial class MainWindow : Window {
             "-Gain", BridgeGainSlider.Value.ToString("0.###", CultureInfo.InvariantCulture),
             "-PrebufferMilliseconds",
             ((int)Math.Round(BridgePrebufferSlider.Value)).ToString(CultureInfo.InvariantCulture),
+            "-LatencyMode", SelectedBridgeLatencyMode.ToString(),
             "-Layout", currentPath
         ];
         await RunBridgeCommandAsync(BridgeStartScript(mode), arguments, mode, "iniciar");

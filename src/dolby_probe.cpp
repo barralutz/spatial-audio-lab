@@ -58,10 +58,13 @@ void PrintUsage() {
         << L"dolby-probe extract-mat-712 input.wav output.wav\n\n"
         << L"dolby-probe play-712 input.wav [rear-filter] [height-filter] [gain] [repeat]\n\n"
         << L"dolby-probe live-712 [seconds] [rear-filter] [height-filter] [gain] [prebuffer-ms]\n\n"
-        << L"dolby-probe test-layout [seconds] [layout.ini] [gain]\n"
-        << L"dolby-probe test-speaker [seconds] [layout.ini] [speaker] [gain]\n"
-        << L"dolby-probe live-layout [seconds] [layout.ini] [gain] [prebuffer-ms]\n\n"
-        << L"dolby-probe live-dtsx-layout [seconds] [layout.ini] [gain] [prebuffer-ms]\n\n"
+        << L"dolby-probe test-layout [seconds] [layout.ini] [gain] [safe|balanced|low]\n"
+        << L"dolby-probe test-speaker [seconds] [layout.ini] [speaker] [gain] "
+           L"[safe|balanced|low]\n"
+        << L"dolby-probe live-layout [seconds] [layout.ini] [gain] [prebuffer-ms] "
+           L"[safe|balanced|low]\n\n"
+        << L"dolby-probe live-dtsx-layout [seconds] [layout.ini] [gain] [prebuffer-ms] "
+           L"[safe|balanced|low]\n\n"
         << L"An empty endpoint filter selects the default render endpoint.\n";
 }
 } // namespace dolby
@@ -182,11 +185,14 @@ int wmain(const int argc, wchar_t** argv) {
             const std::filesystem::path layoutPath =
                 argc >= 4 ? argv[3] : L"configs\\realtek-c1u-714.ini";
             const double gain = argc >= 5 ? std::stod(argv[4]) : 0.0;
+            const RendererLatencyMode latencyMode = argc >= 6
+                ? ParseRendererLatencyMode(argv[5])
+                : RendererLatencyMode::Safe;
             if (seconds <= 0.0 || seconds > 3'600.0 || gain < 0.0 || gain > 1.0) {
                 throw std::runtime_error(
                     "test-layout requires 0 < seconds <= 3600 and 0 <= gain <= 1");
             }
-            TestSpeakerLayout(seconds, LoadSpeakerLayout(layoutPath), gain);
+            TestSpeakerLayout(seconds, LoadSpeakerLayout(layoutPath), gain, {}, latencyMode);
             return 0;
         }
 
@@ -199,11 +205,15 @@ int wmain(const int argc, wchar_t** argv) {
             const std::filesystem::path layoutPath = argv[3];
             const std::wstring speakerName = argv[4];
             const double gain = argc >= 6 ? std::stod(argv[5]) : 0.10;
+            const RendererLatencyMode latencyMode = argc >= 7
+                ? ParseRendererLatencyMode(argv[6])
+                : RendererLatencyMode::Safe;
             if (seconds <= 0.0 || seconds > 60.0 || gain < 0.0 || gain > 1.0) {
                 throw std::runtime_error(
                     "test-speaker requires 0 < seconds <= 60 and 0 <= gain <= 1");
             }
-            TestSpeakerLayout(seconds, LoadSpeakerLayout(layoutPath), gain, speakerName);
+            TestSpeakerLayout(
+                seconds, LoadSpeakerLayout(layoutPath), gain, speakerName, latencyMode);
             return 0;
         }
 
@@ -213,14 +223,18 @@ int wmain(const int argc, wchar_t** argv) {
                 argc >= 4 ? argv[3] : L"configs\\realtek-c1u-714.ini";
             const double gain = argc >= 5 ? std::stod(argv[4]) : 0.25;
             const DWORD prebufferMilliseconds =
-                argc >= 6 ? static_cast<DWORD>(std::stoul(argv[5])) : 80;
+                argc >= 6 ? static_cast<DWORD>(std::stoul(argv[5])) : 40;
+            const RendererLatencyMode latencyMode = argc >= 7
+                ? ParseRendererLatencyMode(argv[6])
+                : RendererLatencyMode::Balanced;
             if (seconds <= 0.0 || seconds > 3'600.0 || gain < 0.0 || gain > 1.0 ||
                 prebufferMilliseconds < 20 || prebufferMilliseconds > 500) {
                 throw std::runtime_error(
                     "live-layout requires 0 < seconds <= 3600, 0 <= gain <= 1 and "
                     "20 <= prebuffer-ms <= 500");
             }
-            PlayLiveMatLayout(seconds, layoutPath, gain, prebufferMilliseconds);
+            PlayLiveMatLayout(
+                seconds, layoutPath, gain, prebufferMilliseconds, latencyMode);
             return 0;
         }
 
@@ -230,14 +244,18 @@ int wmain(const int argc, wchar_t** argv) {
                 argc >= 4 ? argv[3] : L"configs\\realtek-c1u-714.ini";
             const double gain = argc >= 5 ? std::stod(argv[4]) : 0.25;
             const DWORD prebufferMilliseconds =
-                argc >= 6 ? static_cast<DWORD>(std::stoul(argv[5])) : 80;
+                argc >= 6 ? static_cast<DWORD>(std::stoul(argv[5])) : 40;
+            const RendererLatencyMode latencyMode = argc >= 7
+                ? ParseRendererLatencyMode(argv[6])
+                : RendererLatencyMode::Balanced;
             if (seconds <= 0.0 || seconds > 3'600.0 || gain < 0.0 || gain > 1.0 ||
                 prebufferMilliseconds < 20 || prebufferMilliseconds > 500) {
                 throw std::runtime_error(
                     "live-dtsx-layout requires 0 < seconds <= 3600, 0 <= gain <= 1 and "
                     "20 <= prebuffer-ms <= 500");
             }
-            PlayLiveDtsXLayout(seconds, layoutPath, gain, prebufferMilliseconds);
+            PlayLiveDtsXLayout(
+                seconds, layoutPath, gain, prebufferMilliseconds, latencyMode);
             return 0;
         }
 

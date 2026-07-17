@@ -2,6 +2,8 @@
 
 #include "audio_platform.h"
 
+#include <avrt.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -12,6 +14,24 @@
 #include <utility>
 
 namespace dolby {
+
+RendererLatencyMode ParseRendererLatencyMode(const std::wstring_view value) {
+    const std::wstring normalized = Lowercase(std::wstring(value));
+    if (normalized == L"safe") return RendererLatencyMode::Safe;
+    if (normalized == L"balanced") return RendererLatencyMode::Balanced;
+    if (normalized == L"low") return RendererLatencyMode::Low;
+    throw std::runtime_error("Latency mode must be safe, balanced, or low");
+}
+
+std::wstring_view RendererLatencyModeName(const RendererLatencyMode mode) {
+    switch (mode) {
+    case RendererLatencyMode::Safe: return L"safe";
+    case RendererLatencyMode::Balanced: return L"balanced";
+    case RendererLatencyMode::Low: return L"low";
+    }
+    throw std::runtime_error("Unknown renderer latency mode");
+}
+
 namespace {
 
 constexpr double kSampleRate = 48'000.0;
@@ -19,6 +39,27 @@ constexpr double kPi = 3.14159265358979323846;
 constexpr double kClockUpdateSeconds = 0.5;
 constexpr double kControllerRecoveryFrames = kSampleRate * 20.0;
 constexpr double kMaximumRateAdjustment = 0.002;
+
+class MmcssRegistration {
+public:
+    MmcssRegistration() {
+        handle_ = AvSetMmThreadCharacteristicsW(L"Pro Audio", &taskIndex_);
+        if (handle_ != nullptr) AvSetMmThreadPriority(handle_, AVRT_PRIORITY_HIGH);
+    }
+
+    ~MmcssRegistration() {
+        if (handle_ != nullptr) AvRevertMmThreadCharacteristics(handle_);
+    }
+
+    MmcssRegistration(const MmcssRegistration&) = delete;
+    MmcssRegistration& operator=(const MmcssRegistration&) = delete;
+
+    bool IsEnabled() const { return handle_ != nullptr; }
+
+private:
+    HANDLE handle_{};
+    DWORD taskIndex_{};
+};
 
 double DbToLinear(const double decibels) {
     return std::pow(10.0, decibels / 20.0);
@@ -49,7 +90,11 @@ struct RenderStream {
     ComPtr<IAudioClock> clock;
     WinHandle event;
     UINT32 bufferFrames{};
+    UINT32 defaultPeriodFrames{};
+    UINT32 minimumPeriodFrames{};
+    UINT32 selectedPeriodFrames{};
     WORD channels{};
+    REFERENCE_TIME streamLatency{};
     UINT64 clockFrequency{};
     UINT64 startClockPosition{};
     UINT64 endClockPosition{};
@@ -68,10 +113,32 @@ struct RenderStream {
     bool clockRateValid{};
     bool haveClockObservation{};
     bool running{};
+    bool lowLatencyApi{};
 };
 
+UINT32 BalancedPeriod(const UINT32 defaultPeriod,
+                      const UINT32 fundamentalPeriod,
+                      const UINT32 minimumPeriod,
+                      const UINT32 maximumPeriod) {
+    const UINT32 fundamental = std::max<UINT32>(1, fundamentalPeriod);
+    const UINT32 target = std::max(minimumPeriod, defaultPeriod / 2);
+    const std::uint64_t aligned =
+        (static_cast<std::uint64_t>(target) + fundamental - 1) / fundamental * fundamental;
+    return static_cast<UINT32>(std::clamp<std::uint64_t>(
+        aligned, minimumPeriod, maximumPeriod));
+}
+
+void ActivateLegacyClient(const Endpoint& endpoint, ComPtr<IAudioClient>* client) {
+    client->Reset();
+    ThrowIfFailed(endpoint.device->Activate(
+                      __uuidof(IAudioClient), CLSCTX_ALL, nullptr,
+                      reinterpret_cast<void**>(client->ReleaseAndGetAddressOf())),
+                  "Activate multi-endpoint IAudioClient");
+}
+
 RenderStream OpenRenderStream(const SpeakerLayout& layout,
-                              const OutputRouteDefinition& route) {
+                              const OutputRouteDefinition& route,
+                              const RendererLatencyMode latencyMode) {
     const Endpoint endpoint = SelectUniqueEndpoint(route.endpointFilter);
     RenderStream stream;
     stream.routeName = route.name;
@@ -85,9 +152,14 @@ RenderStream OpenRenderStream(const SpeakerLayout& layout,
         stream.speakerGains.push_back(DbToLinear(layout.speakers[speakerIndex].trimDb));
     }
 
-    ThrowIfFailed(endpoint.device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
-                                             &stream.client),
-                  "Activate multi-endpoint IAudioClient");
+    ActivateLegacyClient(endpoint, &stream.client);
+    ComPtr<IAudioClient3> client3;
+    if (SUCCEEDED(stream.client.As(&client3))) {
+        AudioClientProperties properties{};
+        properties.cbSize = sizeof(properties);
+        properties.eCategory = AudioCategory_Media;
+        client3->SetClientProperties(&properties);
+    }
     WAVEFORMATEX* mixFormat = nullptr;
     ThrowIfFailed(stream.client->GetMixFormat(&mixFormat), "Get multi-endpoint mix format");
     const bool validFormat = mixFormat->nChannels == stream.channels &&
@@ -100,10 +172,56 @@ RenderStream OpenRenderStream(const SpeakerLayout& layout,
         CoTaskMemFree(mixFormat);
         throw std::runtime_error("Multi-endpoint route does not match the device mix format");
     }
-    const HRESULT initialize = stream.client->Initialize(
-        AUDCLNT_SHAREMODE_SHARED,
-        AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_NOPERSIST,
-        0, 0, mixFormat, nullptr);
+    constexpr DWORD streamFlags =
+        AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_NOPERSIST;
+    HRESULT initialize = E_NOINTERFACE;
+    if (client3) {
+        UINT32 fundamentalPeriod = 0;
+        UINT32 maximumPeriod = 0;
+        const HRESULT periods = client3->GetSharedModeEnginePeriod(
+            mixFormat, &stream.defaultPeriodFrames, &fundamentalPeriod,
+            &stream.minimumPeriodFrames, &maximumPeriod);
+        if (SUCCEEDED(periods)) {
+            stream.selectedPeriodFrames = stream.defaultPeriodFrames;
+            if (latencyMode == RendererLatencyMode::Balanced) {
+                stream.selectedPeriodFrames = BalancedPeriod(
+                    stream.defaultPeriodFrames, fundamentalPeriod,
+                    stream.minimumPeriodFrames, maximumPeriod);
+            } else if (latencyMode == RendererLatencyMode::Low) {
+                stream.selectedPeriodFrames = stream.minimumPeriodFrames;
+            }
+            if (latencyMode != RendererLatencyMode::Safe) {
+                initialize = client3->InitializeSharedAudioStream(
+                    AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+                    stream.selectedPeriodFrames, mixFormat, nullptr);
+                stream.lowLatencyApi = SUCCEEDED(initialize);
+                if (initialize == AUDCLNT_E_ENGINE_PERIODICITY_LOCKED) {
+                    WAVEFORMATEX* currentFormat = nullptr;
+                    UINT32 currentPeriod = 0;
+                    if (SUCCEEDED(client3->GetCurrentSharedModeEnginePeriod(
+                            &currentFormat, &currentPeriod))) {
+                        CoTaskMemFree(currentFormat);
+                        initialize = client3->InitializeSharedAudioStream(
+                            AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+                            currentPeriod, mixFormat, nullptr);
+                        if (SUCCEEDED(initialize)) {
+                            stream.selectedPeriodFrames = currentPeriod;
+                            stream.lowLatencyApi = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if (latencyMode == RendererLatencyMode::Safe || FAILED(initialize)) {
+        if (latencyMode != RendererLatencyMode::Safe) {
+            client3.Reset();
+            ActivateLegacyClient(endpoint, &stream.client);
+        }
+        initialize = stream.client->Initialize(
+            AUDCLNT_SHAREMODE_SHARED, streamFlags, 0, 0, mixFormat, nullptr);
+        stream.lowLatencyApi = false;
+    }
     CoTaskMemFree(mixFormat);
     ThrowIfFailed(initialize, "Initialize multi-endpoint render stream");
 
@@ -111,6 +229,8 @@ RenderStream OpenRenderStream(const SpeakerLayout& layout,
     if (!stream.event.IsValid()) throw std::runtime_error("Create render event failed");
     ThrowIfFailed(stream.client->SetEventHandle(stream.event.Get()), "Set render event");
     ThrowIfFailed(stream.client->GetBufferSize(&stream.bufferFrames), "Get render buffer size");
+    ThrowIfFailed(stream.client->GetStreamLatency(&stream.streamLatency),
+                  "Get render stream latency");
     ThrowIfFailed(stream.client->GetService(IID_PPV_ARGS(&stream.render)),
                   "Get multi-endpoint render client");
     ThrowIfFailed(stream.client->GetService(IID_PPV_ARGS(&stream.clock)),
@@ -242,23 +362,27 @@ void InterleavedPcmQueue::DiscardBefore(const double sourcePosition) {
 }
 
 struct MultiEndpointRenderer::Impl {
+    MmcssRegistration mmcss;
     SpeakerLayout layout;
     double gain{};
+    RendererLatencyMode latencyMode{};
     std::vector<RenderStream> streams;
     std::vector<HANDLE> events;
     std::chrono::steady_clock::time_point nextClockUpdate{};
     bool started{};
     bool stopped{};
 
-    Impl(const SpeakerLayout& sourceLayout, const double sourceGain)
-        : layout(sourceLayout), gain(sourceGain) {
+    Impl(const SpeakerLayout& sourceLayout,
+         const double sourceGain,
+         const RendererLatencyMode sourceLatencyMode)
+        : layout(sourceLayout), gain(sourceGain), latencyMode(sourceLatencyMode) {
         if (gain < 0.0 || gain > 1.0) {
             throw std::runtime_error("Multi-endpoint gain must be between 0 and 1");
         }
         streams.reserve(layout.outputs.size());
         events.reserve(layout.outputs.size());
         for (const OutputRouteDefinition& output : layout.outputs) {
-            streams.push_back(OpenRenderStream(layout, output));
+            streams.push_back(OpenRenderStream(layout, output, latencyMode));
             events.push_back(streams.back().event.Get());
         }
     }
@@ -299,8 +423,10 @@ struct MultiEndpointRenderer::Impl {
     }
 };
 
-MultiEndpointRenderer::MultiEndpointRenderer(const SpeakerLayout& layout, const double gain)
-    : impl_(std::make_unique<Impl>(layout, gain)) {}
+MultiEndpointRenderer::MultiEndpointRenderer(const SpeakerLayout& layout,
+                                             const double gain,
+                                             const RendererLatencyMode latencyMode)
+    : impl_(std::make_unique<Impl>(layout, gain, latencyMode)) {}
 
 MultiEndpointRenderer::~MultiEndpointRenderer() {
     try {
@@ -382,6 +508,14 @@ std::uint64_t MultiEndpointRenderer::MinimumFramesAvailable(
     return minimum;
 }
 
+std::uint32_t MultiEndpointRenderer::MaximumBufferFrames() const {
+    return std::max_element(
+        impl_->streams.begin(), impl_->streams.end(),
+        [](const RenderStream& first, const RenderStream& second) {
+            return first.bufferFrames < second.bufferFrames;
+        })->bufferFrames;
+}
+
 bool MultiEndpointRenderer::IsDrained(const InterleavedPcmQueue& queue) const {
     return std::all_of(impl_->streams.begin(), impl_->streams.end(), [&](const RenderStream& stream) {
         return queue.FramesAvailable(stream.sourcePosition) == 0;
@@ -395,11 +529,7 @@ bool MultiEndpointRenderer::IsStarted() const {
 void MultiEndpointRenderer::Stop() {
     if (!impl_ || impl_->stopped) return;
     if (impl_->started) {
-        const UINT32 maximumBuffer = std::max_element(
-            impl_->streams.begin(), impl_->streams.end(),
-            [](const RenderStream& first, const RenderStream& second) {
-                return first.bufferFrames < second.bufferFrames;
-            })->bufferFrames;
+        const UINT32 maximumBuffer = MaximumBufferFrames();
         Sleep(static_cast<DWORD>(std::ceil(maximumBuffer * 1000.0 / kSampleRate)) + 20);
         for (RenderStream& stream : impl_->streams) {
             ThrowIfFailed(stream.clock->GetPosition(&stream.endClockPosition, nullptr),
@@ -445,6 +575,14 @@ std::vector<EndpointRenderStats> MultiEndpointRenderer::Stats() const {
         stats.phaseErrorMilliseconds = stream.phaseErrorFrames * 1000.0 / kSampleRate;
         stats.maximumPhaseErrorMilliseconds =
             stream.maximumPhaseErrorFrames * 1000.0 / kSampleRate;
+        stats.bufferFrames = stream.bufferFrames;
+        stats.bufferMilliseconds = stream.bufferFrames * 1000.0 / kSampleRate;
+        stats.streamLatencyMilliseconds = stream.streamLatency / 10'000.0;
+        stats.defaultPeriodFrames = stream.defaultPeriodFrames;
+        stats.minimumPeriodFrames = stream.minimumPeriodFrames;
+        stats.selectedPeriodFrames = stream.selectedPeriodFrames;
+        stats.lowLatencyApi = stream.lowLatencyApi;
+        stats.mmcssEnabled = impl_->mmcss.IsEnabled();
         result.push_back(std::move(stats));
     }
     return result;
@@ -462,19 +600,28 @@ void PrintEndpointRenderStats(const std::vector<EndpointRenderStats>& stats) {
                    << stream.resampleAdjustmentPpm << L" ppm\n"
                    << L"    phase=" << stream.phaseErrorMilliseconds
                    << L" ms, max phase=" << stream.maximumPhaseErrorMilliseconds
-                   << L" ms, starvation=" << stream.starvationFrames << L" frames\n";
+                   << L" ms, starvation=" << stream.starvationFrames << L" frames\n"
+                   << L"    buffer=" << stream.bufferFrames << L" frames / "
+                   << stream.bufferMilliseconds << L" ms, stream latency="
+                   << stream.streamLatencyMilliseconds << L" ms, period="
+                   << stream.selectedPeriodFrames << L" frames (default="
+                   << stream.defaultPeriodFrames << L", min="
+                   << stream.minimumPeriodFrames << L"), IAudioClient3="
+                   << (stream.lowLatencyApi ? L"yes" : L"no") << L", MMCSS="
+                   << (stream.mmcssEnabled ? L"Pro Audio" : L"unavailable") << L"\n";
     }
 }
 
 void TestSpeakerLayout(const double seconds,
                        const SpeakerLayout& layout,
                        const double gain,
-                       const std::wstring_view speakerName) {
+                       const std::wstring_view speakerName,
+                       const RendererLatencyMode latencyMode) {
     if (seconds <= 0.0 || seconds > 3'600.0) {
         throw std::runtime_error("Layout test duration must be between 0 and 3600 seconds");
     }
     InterleavedPcmQueue queue(layout.speakers.size());
-    MultiEndpointRenderer renderer(layout, gain);
+    MultiEndpointRenderer renderer(layout, gain, latencyMode);
     const std::uint64_t totalFrames = static_cast<std::uint64_t>(
         std::ceil(seconds * kSampleRate));
     constexpr std::uint64_t targetBufferedFrames = 24'000;

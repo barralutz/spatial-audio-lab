@@ -292,6 +292,31 @@
                              FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" />
                 </Grid>
 
+                <TextBlock Text="LATENCIA" FontSize="11" FontWeight="SemiBold"
+                           Foreground="#59636A" Margin="0,0,0,8" />
+                <Grid Margin="0,0,0,18">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="8" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="8" />
+                    <ColumnDefinition Width="*" />
+                  </Grid.ColumnDefinitions>
+                  <RadioButton x:Name="SafeLatencyButton" Style="{StaticResource SegmentButton}"
+                               GroupName="BridgeLatency" Content="Seguro"
+                               ToolTip="Período predeterminado y 80 ms de prebuffer"
+                               Checked="BridgeLatencyChecked" />
+                  <RadioButton Grid.Column="2" x:Name="BalancedLatencyButton"
+                               Style="{StaticResource SegmentButton}" GroupName="BridgeLatency"
+                               Content="Equilibrado" IsChecked="True"
+                               ToolTip="Período intermedio y 40 ms de prebuffer"
+                               Checked="BridgeLatencyChecked" />
+                  <RadioButton Grid.Column="4" x:Name="LowLatencyButton"
+                               Style="{StaticResource SegmentButton}" GroupName="BridgeLatency"
+                               Content="Bajo" ToolTip="Período mínimo y 20 ms de prebuffer"
+                               Checked="BridgeLatencyChecked" />
+                </Grid>
+
                 <Grid>
                   <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
@@ -311,7 +336,7 @@
                   <TextBlock Text="Prebuffer" />
                   <TextBlock Grid.Column="1" x:Name="BridgePrebufferValue" TextAlignment="Right" />
                 </Grid>
-                <Slider x:Name="BridgePrebufferSlider" Minimum="20" Maximum="500" Value="80"
+                <Slider x:Name="BridgePrebufferSlider" Minimum="20" Maximum="500" Value="40"
                         TickFrequency="10" IsSnapToTickEnabled="True"
                         ValueChanged="BridgeControlChanged" />
 

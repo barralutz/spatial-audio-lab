@@ -943,7 +943,8 @@ void PlayLiveMat712(const double seconds,
 void PlayLiveMatLayout(const double seconds,
                        const std::filesystem::path& layoutPath,
                        const double gain,
-                       const DWORD prebufferMilliseconds) {
+                       const DWORD prebufferMilliseconds,
+                       const RendererLatencyMode latencyMode) {
     if (gain < 0.0 || gain > 1.0) {
         throw std::runtime_error("Live layout gain must be between 0 and 1");
     }
@@ -952,14 +953,16 @@ void PlayLiveMatLayout(const double seconds,
     WinHandle device = OpenMatCaptureDevice();
     ResetMatCapture(device.Get());
     BridgeMeterPublisher meters(layout, BridgeMeterMode::Mat);
-    MultiEndpointRenderer renderer(layout, gain);
+    MultiEndpointRenderer renderer(layout, gain, latencyMode);
     Mat712Decoder decoder(layout);
     Mat712StreamFramer framer;
     InterleavedPcmQueue queue(layout.speakers.size());
     constexpr std::size_t requestPayloadBytes = 256U * 1024U;
     std::vector<BYTE> request(sizeof(MAT_CAPTURE_READ_HEADER) + requestPayloadBytes);
-    const std::uint64_t prebufferFrames =
-        std::max<std::uint64_t>(960, static_cast<std::uint64_t>(prebufferMilliseconds) * 48);
+    const std::uint64_t prebufferFrames = std::max<std::uint64_t>(
+        std::max<std::uint64_t>(
+            960, static_cast<std::uint64_t>(prebufferMilliseconds) * 48),
+        renderer.MaximumBufferFrames());
     std::uint64_t expectedSequence = 0;
     std::uint64_t sequenceGaps = 0;
     std::uint64_t ringBytes = 0;
@@ -973,10 +976,16 @@ void PlayLiveMatLayout(const double seconds,
     const auto initialStats = renderer.Stats();
     for (const EndpointRenderStats& output : initialStats) {
         std::wcout << L"  " << output.routeName << L": " << output.endpointName
-                   << (output.isMaster ? L" [master]" : L"") << L"\n";
+                   << (output.isMaster ? L" [master]" : L"")
+                   << L", buffer=" << std::fixed << std::setprecision(2)
+                   << output.bufferMilliseconds << L" ms, period="
+                   << output.selectedPeriodFrames << L" frames"
+                   << (output.lowLatencyApi ? L" [IAudioClient3]" : L"") << L"\n";
     }
     std::wcout << L"  gain=" << std::fixed << std::setprecision(2) << gain
-               << L", prebuffer=" << prebufferMilliseconds << L" ms\n";
+               << L", prebuffer=" << prebufferMilliseconds << L" ms, latency="
+               << RendererLatencyModeName(latencyMode) << L", effective="
+               << std::setprecision(2) << prebufferFrames / 48.0 << L" ms\n";
 
     const auto startTime = std::chrono::steady_clock::now();
     const auto deadline = startTime + std::chrono::duration<double>(seconds);

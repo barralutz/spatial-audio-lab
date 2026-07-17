@@ -86,6 +86,22 @@ endpoints, por lo que permiten distinguir si el contenido realmente activa `TFL/
 puente publica los niveles por memoria compartida, el editor los actualiza cada 100 ms y los limpia
 si no recibe datos nuevos durante 500 ms.
 
+El selector de latencia ofrece tres perfiles comunes a MAT y DTS:X: `Seguro` usa el periodo
+compartido predeterminado y 80 ms de prebuffer, `Equilibrado` solicita un periodo intermedio y usa
+40 ms, y `Bajo` solicita el minimo y usa 20 ms. El renderer consulta cada endpoint mediante
+`IAudioClient3`, respeta los multiplos permitidos por su driver y vuelve al inicializador WASAPI
+anterior si la API o el periodo solicitado no estan disponibles. El hilo de decoder/render se
+registra en MMCSS como `Pro Audio` para reducir jitter de planificacion.
+
+En la configuracion actual los tres endpoints informan periodo predeterminado y minimo de 480
+frames a 48 kHz, con buffers WASAPI de 1056 frames (22 ms). Por eso `IAudioClient3` no puede reducir
+el buffer fisico con estos drivers; el ahorro controlable proviene principalmente del prebuffer.
+Una reinyeccion DTS:X 7.1.4 completa en perfil `Bajo` proceso 375 bursts y 192.000 frames PCM con
+cero drops, gaps, bursts malformados, clipping, objetos sin mapear o starvation. `Equilibrado` es
+el valor predeterminado conservador; `Bajo` queda disponible para pruebas prolongadas con juegos.
+El prebuffer efectivo nunca baja del buffer WASAPI mas grande, por lo que en este equipo `Bajo`
+equivale a 22 ms reales aunque el control solicite 20 ms.
+
 ```powershell
 .\tools\Build-DolbyProbe.ps1
 .\tools\Build-SpeakerLayoutEditor.ps1
@@ -99,7 +115,8 @@ si no recibe datos nuevos durante 500 ms.
   'SinkDescription Sample' 714
 
 # Requiere el arranque F7 y el driver SysVAD de prueba.
-.\tools\Start-Live714.ps1 -DurationSeconds 3600 -Gain 0.25
+.\tools\Start-Live714.ps1 -DurationSeconds 3600 -Gain 0.25 `
+  -LatencyMode Balanced -PrebufferMilliseconds 40
 .\tools\Stop-Live714.ps1
 ```
 
@@ -375,7 +392,8 @@ una cama estatica 7.1.4, por lo que la ruta analogica no interpreta metadata pri
   '.\captures\dtsx-spatial-714.wav' 32 pcm '.\captures\dtsx-decoded-71.wav'
 
 # Puente de juegos DTS:X E1 a las salidas del perfil 7.1.4.
-.\tools\Start-LiveDtsX714.ps1 -DurationSeconds 3600 -Gain 0.25
+.\tools\Start-LiveDtsX714.ps1 -DurationSeconds 3600 -Gain 0.25 `
+  -LatencyMode Balanced -PrebufferMilliseconds 40
 .\tools\Stop-LiveDtsX714.ps1
 ```
 

@@ -7,7 +7,10 @@ param(
     [double]$Gain = 0.25,
 
     [ValidateRange(20, 500)]
-    [int]$PrebufferMilliseconds = 80,
+    [int]$PrebufferMilliseconds = 40,
+
+    [ValidateSet('Safe', 'Balanced', 'Low')]
+    [string]$LatencyMode = 'Balanced',
 
     [string]$Layout = ''
 )
@@ -50,7 +53,8 @@ if ($LASTEXITCODE -ne 0) {
 
 Remove-Item $stdout, $stderr, $pidFile -Force -ErrorAction SilentlyContinue
 $gainText = $Gain.ToString([Globalization.CultureInfo]::InvariantCulture)
-$arguments = "live-dtsx-layout $DurationSeconds `"$layoutPath`" $gainText $PrebufferMilliseconds"
+$latencyText = $LatencyMode.ToLowerInvariant()
+$arguments = "live-dtsx-layout $DurationSeconds `"$layoutPath`" $gainText $PrebufferMilliseconds $latencyText"
 $process = Start-Process -FilePath $exe -ArgumentList $arguments -PassThru -WindowStyle Hidden `
     -RedirectStandardOutput $stdout -RedirectStandardError $stderr
 
@@ -62,7 +66,7 @@ if ($process.HasExited) {
 }
 
 Set-Content -Path $pidFile -Value $process.Id -Encoding Ascii
-Write-Host "live-dtsx-layout started: PID=$($process.Id), duration=$DurationSeconds s, gain=$gainText."
+Write-Host "live-dtsx-layout started: PID=$($process.Id), duration=$DurationSeconds s, gain=$gainText, latency=$latencyText."
 Write-Host "Layout: $layoutPath"
 Write-Host "Log: $stdout"
 Write-Host 'Stop with: .\tools\Stop-LiveDtsX714.ps1'
