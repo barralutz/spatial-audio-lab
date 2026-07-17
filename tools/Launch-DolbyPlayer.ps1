@@ -79,7 +79,7 @@ try {
     }
 
     $mediaPath = [IO.Path]::GetFullPath($InputFile)
-    if (-not (Test-Path $mediaPath -PathType Leaf)) {
+    if (-not [IO.File]::Exists($mediaPath)) {
         throw "No se encontro el archivo:`n$mediaPath"
     }
     if (Get-Process 'SpatialAudioLab.Cinema' -ErrorAction SilentlyContinue) {

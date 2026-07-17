@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory, Position = 0)]
-    [ValidateScript({ Test-Path $_ -PathType Leaf })]
+    [ValidateScript({ [IO.File]::Exists([IO.Path]::GetFullPath($_)) })]
     [string]$InputFile,
 
     [ValidateRange(0, 86400)]
@@ -35,7 +35,7 @@ if (-not $SkipBridgeSetup) {
 
 $invariant = [Globalization.CultureInfo]::InvariantCulture
 $arguments = @(
-    'play', (Resolve-Path $InputFile).Path,
+    'play', (Resolve-Path -LiteralPath $InputFile).Path,
     '--start', $StartSeconds.ToString($invariant),
     '--gain', $Gain.ToString($invariant),
     '--av-delay-ms', $AvDelayMilliseconds.ToString($invariant),
