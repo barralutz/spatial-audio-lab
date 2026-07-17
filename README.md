@@ -77,20 +77,33 @@ posiciones` devuelve azimut y elevacion al esquema 7.1.4 estandar sin cambiar ni
 retardos.
 La pestaña `Puentes` selecciona `Dolby MAT` o `DTS:X`, inicia y detiene el script correspondiente,
 controla ganancia, prebuffer y duracion, muestra el PID activo, abre su registro y ofrece acceso
-directo a la configuracion de sonido espacial. Si un puente ya esta ejecutandose, el editor
-selecciona su modo, bloquea el arranque del otro y dirige `Detener` al proceso activo. El puente se
-ejecuta como proceso independiente y continua activo al cerrar el editor; si hace falta elevacion,
-Windows solicita UAC al ejecutar el script correspondiente.
+directo a la configuracion de sonido espacial. Con un puente activo se puede seleccionar el otro
+codec y pulsar `Cambiar`; el script detiene el proceso anterior, reconfigura y valida el endpoint y
+arranca el nuevo puente. `Detener` sigue dirigido al proceso activo. El puente se ejecuta como
+proceso independiente y continua activo al cerrar el editor; si hace falta elevacion, Windows
+solicita UAC al ejecutar el script correspondiente.
 
 Antes de iniciar, ambos scripts verifican el carrier configurado y abren durante 250 ms un stream
 espacial silencioso. Atmos solo se acepta con MAT y la firma observada del renderer Dolby
-(`0xC1FFE`, 20 objetos); DTS:X exige carrier E1/E2 y un stream operativo. Esto evita iniciar un
-puente que quedaria mudo cuando `Formato` muestra Atmos pero `Sonido espacial` todavia conserva
-DTS:X. Para cambiar de codec: detener el puente, seleccionar el codec deseado tanto en `Formato`
-como en `Sonido espacial`, y volver a iniciar. Si Dolby desaparece del segundo selector,
-`tools\Repair-DolbySpatialProvider.ps1` vuelve a registrar Dolby Access sin borrar sus datos,
-reinicia la pila de audio y abre Dolby Access para repetir `Dolby Atmos for Home Theater >
-Configurar`.
+(`0xC1FFE`, 20 objetos); DTS:X exige E1/E2 y su firma (`0xFFFFE`, 32 objetos). Esto evita iniciar un
+puente que quedaria mudo cuando `Formato` y el renderer espacial no coinciden.
+
+`tools\Set-SpatialProvider.ps1` automatiza el cambio. Primero solicita el formato mediante
+`SpatialAudioDeviceConfiguration`. En la compilacion actual de Windows esa API devuelve
+`AccessDenied` o `NotSupportedOnAudioEndpoint` para este endpoint SysVAD, aunque ambos proveedores
+estan instalados. La ruta de recuperacion conserva los cuatro valores espaciales anteriores,
+configura GUID, mascara y numero de objetos del proveedor solicitado y reenumera unicamente
+`ROOT\MEDIA\0001` con `pnputil`. Al reaparecer, Windows reconstruye tambien el carrier correcto:
+MAT 2.1 Profile 3 para Atmos o DTS:X E1. Si la validacion posterior falla, el script restaura el
+estado anterior y vuelve a reenumerar el dispositivo. No hace falta reiniciar Windows ni manipular
+manualmente `Formato` y `Sonido espacial`.
+
+Esta ruta usa propiedades privadas de MMDevices observadas en Windows `10.0.26200.8655`; es una
+solucion experimental ligada al endpoint SysVAD de prueba, no una API publica portable. La
+reenumeracion hace desaparecer el dispositivo durante unos segundos. Conviene cambiar el codec
+antes de abrir el juego; una aplicacion que no gestione cambios de dispositivo puede requerir ser
+reiniciada. Si el registro del proveedor Dolby desaparece por completo,
+`tools\Repair-DolbySpatialProvider.ps1` sigue disponible para volver a registrar Dolby Access.
 La misma pestaña muestra RMS suavizado y retencion de pico para cada canal logico del perfil. Los
 medidores se toman despues del decoder y antes de la ganancia global, trims y distribucion entre
 endpoints, por lo que permiten distinguir si el contenido realmente activa `TFL/TFR/TBL/TBR`. El
@@ -129,6 +142,10 @@ equivale a 22 ms reales aunque el control solicite 20 ms.
 .\tools\Start-Live714.ps1 -DurationSeconds 3600 -Gain 0.25 `
   -LatencyMode Balanced -PrebufferMilliseconds 40
 .\tools\Stop-Live714.ps1
+
+.\tools\Start-LiveDtsX714.ps1 -DurationSeconds 3600 -Gain 0.25 `
+  -LatencyMode Balanced -PrebufferMilliseconds 40
+.\tools\Stop-LiveDtsX714.ps1
 ```
 
 `live-layout` es actualmente la ruta configurable para MAT de juegos. `DolbyPlayer` todavia

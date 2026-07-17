@@ -73,6 +73,7 @@ public partial class MainWindow : Window {
     bool dragActivated;
     bool updatingEndpointChoices;
     bool bridgeCommandRunning;
+    bool bridgeModeSelectionInitialized;
     public ObservableCollection<EndpointChoice> EndpointChoices { get; } = [];
 
     public MainWindow() {
@@ -310,7 +311,10 @@ public partial class MainWindow : Window {
         BridgeDurationValue.Text = $"{Math.Round(BridgeDurationSlider.Value):0} min";
     }
 
-    void BridgeModeClick(object sender, RoutedEventArgs e) => UpdateBridgeStatus();
+    void BridgeModeClick(object sender, RoutedEventArgs e) {
+        bridgeModeSelectionInitialized = true;
+        UpdateBridgeStatus();
+    }
 
     void SelectBridgeMode(BridgeMode mode) {
         MatModeButton.IsChecked = mode == BridgeMode.Mat;
@@ -350,7 +354,10 @@ public partial class MainWindow : Window {
     void UpdateBridgeStatus() {
         List<BridgeMode> runningModes = RunningBridgeModes();
         BridgeMode statusMode = runningModes.Count == 1 ? runningModes[0] : SelectedBridgeMode;
-        if (runningModes.Count == 1) SelectBridgeMode(statusMode);
+        if (!bridgeModeSelectionInitialized && runningModes.Count == 1) {
+            SelectBridgeMode(statusMode);
+            bridgeModeSelectionInitialized = true;
+        }
 
         if (!bridgeCommandRunning) {
             if (runningModes.Count > 1) {
@@ -366,17 +373,22 @@ public partial class MainWindow : Window {
         }
 
         bool anyRunning = runningModes.Count != 0;
+        bool selectedModeRunning = runningModes.Count == 1 &&
+            runningModes[0] == SelectedBridgeMode;
         BridgeStatusDot.Fill = new SolidColorBrush(runningModes.Count > 1
             ? Color.FromRgb(178, 80, 65)
             : anyRunning
                 ? Color.FromRgb(55, 145, 99)
                 : Color.FromRgb(139, 148, 154));
         if (!bridgeCommandRunning) {
-            BridgeStartButton.IsEnabled = !anyRunning;
+            BridgeStartButton.IsEnabled = !selectedModeRunning;
             BridgeStopButton.IsEnabled = anyRunning;
+            BridgeStartText.Text = !anyRunning
+                ? "Iniciar"
+                : selectedModeRunning ? "Activo" : "Cambiar";
         }
-        MatModeButton.IsEnabled = !anyRunning && !bridgeCommandRunning;
-        DtsXModeButton.IsEnabled = !anyRunning && !bridgeCommandRunning;
+        MatModeButton.IsEnabled = !bridgeCommandRunning;
+        DtsXModeButton.IsEnabled = !bridgeCommandRunning;
         BridgeGainSlider.IsEnabled = !anyRunning && !bridgeCommandRunning;
         BridgePrebufferSlider.IsEnabled = !anyRunning && !bridgeCommandRunning;
         BridgeDurationSlider.IsEnabled = !anyRunning && !bridgeCommandRunning;
@@ -388,10 +400,7 @@ public partial class MainWindow : Window {
 
     async void StartBridgeClick(object sender, RoutedEventArgs e) {
         if (currentPath is null) return;
-        if (RunningBridgeModes().Count != 0) {
-            UpdateBridgeStatus();
-            return;
-        }
+        bool switching = RunningBridgeModes().Count != 0;
         if (!SaveProfile(currentPath)) return;
 
         BridgeMode mode = SelectedBridgeMode;
@@ -404,7 +413,8 @@ public partial class MainWindow : Window {
             "-LatencyMode", SelectedBridgeLatencyMode.ToString(),
             "-Layout", currentPath
         ];
-        await RunBridgeCommandAsync(BridgeStartScript(mode), arguments, mode, "iniciar");
+        await RunBridgeCommandAsync(
+            BridgeStartScript(mode), arguments, mode, switching ? "cambiar" : "iniciar");
     }
 
     async void StopBridgeClick(object sender, RoutedEventArgs e) {
@@ -422,9 +432,11 @@ public partial class MainWindow : Window {
         bridgeCommandRunning = true;
         BridgeStartButton.IsEnabled = false;
         BridgeStopButton.IsEnabled = false;
-        BridgeStatusText.Text = operation == "iniciar"
-            ? $"Iniciando {bridgeName}..."
-            : $"Deteniendo {bridgeName}...";
+        BridgeStatusText.Text = operation switch {
+            "iniciar" => $"Iniciando {bridgeName}...",
+            "cambiar" => $"Cambiando a {bridgeName}...",
+            _ => $"Deteniendo {bridgeName}..."
+        };
         try {
             ScriptResult result = await RunPowerShellScriptAsync(
                 IOPath.Combine(repoRoot, "tools", scriptName), arguments);
@@ -438,9 +450,11 @@ public partial class MainWindow : Window {
             }
             await Task.Delay(350);
             UpdateBridgeStatus();
-            StatusText.Text = operation == "iniciar"
-                ? $"{bridgeName} iniciado"
-                : $"{bridgeName} detenido";
+            StatusText.Text = operation switch {
+                "iniciar" => $"{bridgeName} iniciado",
+                "cambiar" => $"Puente cambiado a {bridgeName}",
+                _ => $"{bridgeName} detenido"
+            };
         } catch (Win32Exception error) when (error.NativeErrorCode == 1223) {
             StatusText.Text = $"Operacion {bridgeName} cancelada";
         } catch (Exception error) {

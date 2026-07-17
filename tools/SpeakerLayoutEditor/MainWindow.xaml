@@ -362,7 +362,7 @@
                     <StackPanel Orientation="Horizontal">
                       <TextBlock FontFamily="Segoe Fluent Icons" Text="&#xE768;"
                                  FontSize="16" Margin="0,0,8,0" />
-                      <TextBlock Text="Iniciar" />
+                      <TextBlock x:Name="BridgeStartText" Text="Iniciar" />
                     </StackPanel>
                   </Button>
                   <Button Grid.Column="2" x:Name="BridgeStopButton" Height="42"

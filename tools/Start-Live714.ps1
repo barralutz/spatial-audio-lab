@@ -43,14 +43,12 @@ New-Item -ItemType Directory -Path $captureRoot -Force | Out-Null
 $existing = @(Get-CimInstance Win32_Process -Filter "Name='dolby-probe.exe'" |
     Where-Object { $_.CommandLine -match '(?i)\blive-(dtsx-)?layout\b' })
 if ($existing.Count -ne 0) {
-    throw "A live layout bridge is already running with PID(s): $($existing.ProcessId -join ', ')"
+    & (Join-Path $PSScriptRoot 'Stop-Live714.ps1')
+    & (Join-Path $PSScriptRoot 'Stop-LiveDtsX714.ps1')
+    Start-Sleep -Milliseconds 300
 }
 
-& $exe set-default 'SinkDescription Sample'
-if ($LASTEXITCODE -ne 0) {
-    throw "Could not select SinkDescription Sample: $LASTEXITCODE"
-}
-& (Join-Path $PSScriptRoot 'Test-SpatialProvider.ps1') -Mode Atmos
+& (Join-Path $PSScriptRoot 'Set-SpatialProvider.ps1') -Mode Atmos
 
 Remove-Item $stdout, $stderr, $pidFile -Force -ErrorAction SilentlyContinue
 $gainText = $Gain.ToString([Globalization.CultureInfo]::InvariantCulture)

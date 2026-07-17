@@ -32,37 +32,30 @@ if (-not $formatMatches) {
     }
     throw @"
 El carrier activo no corresponde a $Mode ($currentFormat).
-Deten los puentes y selecciona '$wanted' en Configuracion > Sonido > SinkDescription Sample.
-Cambia tambien 'Sonido espacial'; no basta con cambiar solamente 'Formato'.
+El selector automatico debe activar '$wanted' antes de iniciar el puente.
 "@
 }
 
 $spatialOutput = @(& $exe spatial-test 0.25 $EndpointFilter silence 2>&1 |
     ForEach-Object { "$_" })
 if ($LASTEXITCODE -ne 0) {
-    $repair = if ($Mode -eq 'Atmos') {
-        " Si Dolby no aparece en Sonido espacial, ejecuta tools\Repair-DolbySpatialProvider.ps1."
-    } else {
-        ' Abre DTS Sound Unbound y vuelve a activar DTS:X Home Theater.'
-    }
     throw @"
 El carrier de $Mode esta seleccionado, pero el renderer espacial no puede abrir un stream.
-En Configuracion > Sonido > SinkDescription Sample selecciona el mismo proveedor en Sonido espacial.$repair
 $($spatialOutput -join "`n")
 "@
 }
 
-if ($Mode -eq 'Atmos') {
-    $signature = $spatialOutput | Where-Object { $_ -match 'Native static mask:' } |
-        Select-Object -First 1
-    if ($signature -notmatch '0xC1FFE, dynamic objects: 20') {
-        throw @"
-El carrier MAT esta activo, pero el renderer no es Dolby Atmos ($signature).
-Selecciona Dolby Atmos en Sonido espacial; no basta con cambiar solamente Formato.
-"@
-    }
+$signature = $spatialOutput | Where-Object { $_ -match 'Native static mask:' } |
+    Select-Object -First 1
+$signatureMatches = if ($Mode -eq 'Atmos') {
+    $signature -match '0xC1FFE, dynamic objects: 20'
+} else {
+    $signature -match '0xFFFFE, dynamic objects: 32'
+}
+if (-not $signatureMatches) {
+    throw "El carrier esta activo, pero la firma espacial no corresponde a $Mode ($signature)."
 }
 
 Write-Host "$Mode spatial provider ready."
 Write-Host $currentFormat
-$spatialOutput | Where-Object { $_ -match 'Native static mask:' } | Select-Object -First 1
+Write-Host $signature
