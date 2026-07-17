@@ -10,7 +10,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path $PSScriptRoot -Parent
-$probe = Join-Path $repoRoot 'build\dolby-probe.exe'
+$probe = Join-Path $repoRoot 'build\SpatialAudioLab.CLI.exe'
 $driverDataRoot = if ($env:DriverData) {
     $env:DriverData
 } else {
@@ -60,7 +60,7 @@ foreach ($fixture in $fixtures.GetEnumerator()) {
     Write-Host "Capturing $($fixture.Key)..."
     & $probe spatial-test $DurationSeconds $EndpointFilter $fixture.Key
     if ($LASTEXITCODE -ne 0) {
-        throw "dolby-probe failed for $($fixture.Key): $LASTEXITCODE"
+        throw "SpatialAudioLab CLI failed for $($fixture.Key): $LASTEXITCODE"
     }
     Start-Sleep -Milliseconds 300
 

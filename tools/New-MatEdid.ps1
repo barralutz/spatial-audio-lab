@@ -222,7 +222,7 @@ $infLines += "HKR,EDID_OVERRIDE,`"$ctaIndex`",0x00000001,$(Get-InfByteList $bloc
 $infLines += @(
     '',
     '[Strings]',
-    'ProviderName="dolbyDecoder experimental"',
+    'ProviderName="SpatialAudioLab experimental"',
     "ModelName=`"$hardwareModel MAT experiment`""
 )
 $infLines | Set-Content -LiteralPath $infPath -Encoding ASCII

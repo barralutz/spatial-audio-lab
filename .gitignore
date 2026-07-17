@@ -2,6 +2,8 @@
 /captures/
 /generated/
 /.vs/
+/overlays/
+/patches/**/000*.patch
 
 *.obj
 *.pdb

@@ -5,7 +5,9 @@
     <UseWPF>true</UseWPF>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <AssemblyName>speaker-layout-editor</AssemblyName>
+    <AssemblyName>SpatialAudioLab.Studio</AssemblyName>
     <RootNamespace>SpeakerLayoutEditor</RootNamespace>
+    <Product>SpatialAudioLab Studio</Product>
+    <Description>Configurable spatial speaker layout and routing studio</Description>
   </PropertyGroup>
 </Project>

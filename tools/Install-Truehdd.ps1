@@ -18,7 +18,7 @@ if (Test-Path $executable) {
     }
 }
 
-$tempRoot = Join-Path ([IO.Path]::GetTempPath()) "dolbyDecoder-truehdd-$version"
+$tempRoot = Join-Path ([IO.Path]::GetTempPath()) "SpatialAudioLab-truehdd-$version"
 $archivePath = Join-Path $tempRoot $archiveName
 Remove-Item $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null

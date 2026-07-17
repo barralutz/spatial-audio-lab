@@ -37,7 +37,7 @@ $compile = @(
     'cl /nologo /std:c++20 /EHsc /W4 /permissive-',
     '/DUNICODE /D_UNICODE /DNOMINMAX /DWIN32_LEAN_AND_MEAN',
     ($sources -join ' '),
-    '/Fe:dolby-probe.exe',
+    '/Fe:SpatialAudioLab.CLI.exe',
     '/link ole32.lib runtimeobject.lib windowsapp.lib uuid.lib avrt.lib propsys.lib mmdevapi.lib',
     'mf.lib mfplat.lib mfreadwrite.lib mfuuid.lib'
 ) -join ' '
@@ -46,8 +46,8 @@ $command = '"' + $devCmd + '" -arch=x64 -host_arch=x64 >nul && cd /d "' +
 
 & cmd.exe /d /s /c $command
 if ($LASTEXITCODE -ne 0) {
-    throw "dolby-probe build failed: $LASTEXITCODE"
+    throw "SpatialAudioLab CLI build failed: $LASTEXITCODE"
 }
-Copy-Item (Join-Path $buildRoot 'dolby-probe.exe') `
-    (Join-Path $publishRoot 'dolby-probe.exe') -Force -ErrorAction Stop
-Write-Host "Built: $(Join-Path $publishRoot 'dolby-probe.exe')"
+Copy-Item (Join-Path $buildRoot 'SpatialAudioLab.CLI.exe') `
+    (Join-Path $publishRoot 'SpatialAudioLab.CLI.exe') -Force -ErrorAction Stop
+Write-Host "Built: $(Join-Path $publishRoot 'SpatialAudioLab.CLI.exe')"

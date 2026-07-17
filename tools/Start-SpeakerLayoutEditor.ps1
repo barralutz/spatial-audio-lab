@@ -1,15 +1,15 @@
 [CmdletBinding()]
 param()
 
-$running = @(Get-Process -Name 'speaker-layout-editor' -ErrorAction SilentlyContinue)
+$running = @(Get-Process -Name 'SpatialAudioLab.Studio' -ErrorAction SilentlyContinue)
 if ($running.Count -ne 0) {
-    Write-Host "Speaker Layout Editor is already running with PID(s): $($running.Id -join ', ')"
+    Write-Host "SpatialAudioLab Studio is already running with PID(s): $($running.Id -join ', ')"
     return
 }
 
 $projectRoot = Join-Path $PSScriptRoot 'SpeakerLayoutEditor'
 $executable = Join-Path $PSScriptRoot `
-    'SpeakerLayoutEditor\bin\Release\net8.0-windows\speaker-layout-editor.exe'
+    'SpeakerLayoutEditor\bin\Release\net8.0-windows\SpatialAudioLab.Studio.exe'
 $requiresBuild = -not (Test-Path $executable)
 if (-not $requiresBuild) {
     $executableTime = (Get-Item $executable).LastWriteTimeUtc

@@ -4,8 +4,10 @@
     <TargetFramework>net8.0-windows</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <AssemblyName>dolby-player</AssemblyName>
+    <AssemblyName>SpatialAudioLab.Cinema</AssemblyName>
     <RootNamespace>DolbyPlayer</RootNamespace>
+    <Product>SpatialAudioLab Cinema</Product>
+    <Description>Real-time immersive movie renderer for SpatialAudioLab</Description>
   </PropertyGroup>
 
   <ItemGroup>

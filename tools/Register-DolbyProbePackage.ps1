@@ -5,17 +5,17 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $sourceManifest = Join-Path $repoRoot 'packaging\AppxManifest.xml'
-$sourceExe = Join-Path $repoRoot 'build\dolby-probe.exe'
-$packageRoot = Join-Path $repoRoot 'build-package\DolbyDecoderProbe'
+$sourceExe = Join-Path $repoRoot 'build\SpatialAudioLab.CLI.exe'
+$packageRoot = Join-Path $repoRoot 'build-package\SpatialAudioLabCLI'
 $assetsRoot = Join-Path $packageRoot 'Assets'
 
 if (-not (Test-Path $sourceExe)) {
-    throw 'build\dolby-probe.exe was not found. Run Build-DolbyProbe.ps1 first.'
+    throw 'build\SpatialAudioLab.CLI.exe was not found. Run Build-DolbyProbe.ps1 first.'
 }
 
 New-Item -ItemType Directory -Path $packageRoot, $assetsRoot -Force | Out-Null
 Copy-Item $sourceManifest (Join-Path $packageRoot 'AppxManifest.xml') -Force
-Copy-Item $sourceExe (Join-Path $packageRoot 'dolby-probe.exe') -Force
+Copy-Item $sourceExe (Join-Path $packageRoot 'SpatialAudioLab.CLI.exe') -Force
 
 Add-Type -AssemblyName System.Drawing
 function New-PackageLogo([string]$Path, [int]$Size) {
@@ -67,7 +67,8 @@ if ($developmentPolicy.AllowDevelopmentWithoutDevLicense -eq 1) {
     $certificate = Get-ChildItem Cert:\CurrentUser\My |
         Where-Object {
             $_.Subject -eq 'CN=barra' -and
-            $_.FriendlyName -eq 'Dolby Decoder Probe Development'
+            $_.FriendlyName -in @('SpatialAudioLab Development',
+                                   'Dolby Decoder Probe Development')
         } |
         Sort-Object NotAfter -Descending |
         Select-Object -First 1
@@ -75,7 +76,7 @@ if ($developmentPolicy.AllowDevelopmentWithoutDevLicense -eq 1) {
         $certificate = New-SelfSignedCertificate `
             -Type Custom `
             -Subject 'CN=barra' `
-            -FriendlyName 'Dolby Decoder Probe Development' `
+            -FriendlyName 'SpatialAudioLab Development' `
             -CertStoreLocation 'Cert:\CurrentUser\My' `
             -KeyAlgorithm RSA `
             -KeyLength 2048 `
@@ -86,7 +87,7 @@ if ($developmentPolicy.AllowDevelopmentWithoutDevLicense -eq 1) {
             -TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.3')
     }
 
-    $certificatePath = Join-Path $repoRoot 'build-package\DolbyDecoderProbe.cer'
+    $certificatePath = Join-Path $repoRoot 'build-package\SpatialAudioLab.cer'
     Export-Certificate -Cert $certificate -FilePath $certificatePath -Force | Out-Null
     $trusted = Get-ChildItem Cert:\CurrentUser\TrustedPeople |
         Where-Object Thumbprint -eq $certificate.Thumbprint
@@ -106,7 +107,7 @@ if ($developmentPolicy.AllowDevelopmentWithoutDevLicense -eq 1) {
         }
     }
 
-    $msixPath = Join-Path $repoRoot 'build-package\DolbyDecoderProbe.msix'
+    $msixPath = Join-Path $repoRoot 'build-package\SpatialAudioLab.CLI.msix'
     & (Join-Path $sdkBin 'makeappx.exe') pack /d $packageRoot /p $msixPath /o
     if ($LASTEXITCODE -ne 0) { throw "MakeAppx failed: $LASTEXITCODE" }
     & (Join-Path $sdkBin 'signtool.exe') sign /fd SHA256 /s My `
@@ -120,4 +121,4 @@ if (-not $registered) {
     throw 'The development package did not register.'
 }
 Write-Host "Registered: $($registered.PackageFullName)"
-Write-Host 'Console alias: dolby-probe-dtsx.exe'
+Write-Host 'Console alias: spatial-audio-lab-cli.exe'

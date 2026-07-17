@@ -1,4 +1,14 @@
-# MAT virtual endpoint prototype
+# SpatialAudioLab Virtual Sink
+
+Test-driver notes for the SysVAD-based capture endpoint used by SpatialAudioLab. Start with the
+[project README](../README.md) for architecture and requirements; this document focuses on driver
+development, installation and recovery.
+
+Before building, apply the versioned driver overlay from the repository root:
+
+```powershell
+.\tools\Initialize-SpatialAudioLab.ps1 -Component Driver
+```
 
 The initial prototype is pinned to Microsoft's SysVAD sample at commit
 `2ee527bfeb0aeb6be11f0a8b6dce4011b358ce89` under `windows-driver-samples`.

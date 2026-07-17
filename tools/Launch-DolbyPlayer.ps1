@@ -16,7 +16,7 @@ Add-Type -AssemblyName System.Drawing
 
 function Show-PlayerError([string]$Message) {
     [Windows.Forms.MessageBox]::Show(
-        $Message, 'DolbyPlayer Atmos 7.1.4',
+        $Message, 'SpatialAudioLab Cinema',
         [Windows.Forms.MessageBoxButtons]::OK,
         [Windows.Forms.MessageBoxIcon]::Error) | Out-Null
 }
@@ -28,7 +28,8 @@ function Test-Administrator {
 }
 
 function Test-PcmBridge {
-    @(Get-CimInstance Win32_Process -Filter "Name='dolby-probe.exe'" |
+    @(Get-CimInstance Win32_Process `
+        -Filter "Name='SpatialAudioLab.CLI.exe' OR Name='dolby-probe.exe'" |
         Where-Object { $_.CommandLine -match '(?i)\blive-pcm-layout\b' }).Count -ne 0
 }
 
@@ -43,7 +44,7 @@ function Start-ElevatedLauncher([string]$MediaPath) {
 
 function New-ProgressWindow {
     $form = [Windows.Forms.Form]::new()
-    $form.Text = 'DolbyPlayer Atmos 7.1.4'
+    $form.Text = 'SpatialAudioLab Cinema'
     $form.ClientSize = [Drawing.Size]::new(380, 94)
     $form.StartPosition = [Windows.Forms.FormStartPosition]::CenterScreen
     $form.FormBorderStyle = [Windows.Forms.FormBorderStyle]::FixedDialog
@@ -81,8 +82,8 @@ try {
     if (-not (Test-Path $mediaPath -PathType Leaf)) {
         throw "No se encontro el archivo:`n$mediaPath"
     }
-    if (Get-Process 'dolby-player' -ErrorAction SilentlyContinue) {
-        throw 'DolbyPlayer ya esta reproduciendo una pelicula.'
+    if (Get-Process 'SpatialAudioLab.Cinema' -ErrorAction SilentlyContinue) {
+        throw 'SpatialAudioLab Cinema ya esta reproduciendo una pelicula.'
     }
 
     if (-not (Test-PcmBridge) -and -not (Test-Administrator)) {

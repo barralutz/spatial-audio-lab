@@ -22,7 +22,7 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 }
 
 $repoRoot = Split-Path $PSScriptRoot -Parent
-$exe = Join-Path $repoRoot 'build\dolby-probe.exe'
+$exe = Join-Path $repoRoot 'build\SpatialAudioLab.CLI.exe'
 $captureRoot = Join-Path $repoRoot 'captures'
 $pidFile = Join-Path $captureRoot 'live-714.pid'
 $stdout = Join-Path $captureRoot 'live-714.log'
@@ -33,14 +33,15 @@ if ([string]::IsNullOrWhiteSpace($Layout)) {
 $layoutPath = [IO.Path]::GetFullPath($Layout)
 
 if (-not (Test-Path $exe)) {
-    throw "dolby-probe.exe was not found: $exe"
+    throw "SpatialAudioLab.CLI.exe was not found: $exe"
 }
 if (-not (Test-Path $layoutPath)) {
     throw "Speaker layout was not found: $layoutPath"
 }
 New-Item -ItemType Directory -Path $captureRoot -Force | Out-Null
 
-$existing = @(Get-CimInstance Win32_Process -Filter "Name='dolby-probe.exe'" |
+$existing = @(Get-CimInstance Win32_Process `
+    -Filter "Name='SpatialAudioLab.CLI.exe' OR Name='dolby-probe.exe'" |
     Where-Object { $_.CommandLine -match '(?i)\blive-(dtsx-|pcm-)?layout\b' })
 if ($existing.Count -ne 0) {
     & (Join-Path $PSScriptRoot 'Stop-Live714.ps1')

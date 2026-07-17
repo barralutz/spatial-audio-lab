@@ -10,7 +10,8 @@ param(
     [string]$LatencyMode = 'Balanced'
 )
 
-$running = @(Get-CimInstance Win32_Process -Filter "Name='dolby-probe.exe'" |
+$running = @(Get-CimInstance Win32_Process `
+    -Filter "Name='SpatialAudioLab.CLI.exe' OR Name='dolby-probe.exe'" |
     Where-Object { $_.CommandLine -match '(?i)\blive-pcm-layout\b' })
 if ($running.Count -ne 0) {
     Write-Host "PCM 7.1.4 bridge already active: PID=$($running[0].ProcessId)."
@@ -19,4 +20,3 @@ if ($running.Count -ne 0) {
 
 & (Join-Path $PSScriptRoot 'Start-LivePcm714.ps1') `
     -Gain $Gain -PrebufferMilliseconds $PrebufferMilliseconds -LatencyMode $LatencyMode
-

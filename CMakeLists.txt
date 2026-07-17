@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(dolby_decoder_probe LANGUAGES CXX)
+project(SpatialAudioLab LANGUAGES CXX)
 
-add_executable(dolby-probe
+add_executable(SpatialAudioLab.CLI
   src/audio_platform.cpp
   src/bridge_meter.cpp
   src/capture_commands.cpp
@@ -19,10 +19,10 @@ add_executable(dolby-probe
   src/spatial_audio_sample.cpp
   src/wave_io.cpp
 )
-target_compile_features(dolby-probe PRIVATE cxx_std_20)
-target_compile_definitions(dolby-probe PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
-target_link_libraries(dolby-probe PRIVATE ole32 runtimeobject windowsapp uuid avrt propsys mmdevapi mf mfplat mfreadwrite mfuuid)
+target_compile_features(SpatialAudioLab.CLI PRIVATE cxx_std_20)
+target_compile_definitions(SpatialAudioLab.CLI PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_link_libraries(SpatialAudioLab.CLI PRIVATE ole32 runtimeobject windowsapp uuid avrt propsys mmdevapi mf mfplat mfreadwrite mfuuid)
 
 if(MSVC)
-  target_compile_options(dolby-probe PRIVATE /W4 /permissive- /EHsc)
+  target_compile_options(SpatialAudioLab.CLI PRIVATE /W4 /permissive- /EHsc)
 endif()

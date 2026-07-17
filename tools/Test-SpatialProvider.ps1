@@ -8,9 +8,9 @@ param(
 )
 
 $repoRoot = Split-Path $PSScriptRoot -Parent
-$exe = Join-Path $repoRoot 'build\dolby-probe.exe'
+$exe = Join-Path $repoRoot 'build\SpatialAudioLab.CLI.exe'
 if (-not (Test-Path $exe)) {
-    throw "dolby-probe.exe was not found: $exe"
+    throw "SpatialAudioLab.CLI.exe was not found: $exe"
 }
 
 $formatOutput = @(& $exe device-format $EndpointFilter 2>&1 | ForEach-Object { "$_" })

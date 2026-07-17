@@ -17,18 +17,19 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 }
 
 $repoRoot = Split-Path $PSScriptRoot -Parent
-$exe = Join-Path $repoRoot 'build\dolby-probe.exe'
+$exe = Join-Path $repoRoot 'build\SpatialAudioLab.CLI.exe'
 $captureRoot = Join-Path $repoRoot 'captures'
 $pidFile = Join-Path $captureRoot 'live-712.pid'
 $stdout = Join-Path $captureRoot 'live-712.log'
 $stderr = Join-Path $captureRoot 'live-712.err.log'
 
 if (-not (Test-Path $exe)) {
-    throw "dolby-probe.exe was not found: $exe"
+    throw "SpatialAudioLab.CLI.exe was not found: $exe"
 }
 New-Item -ItemType Directory -Path $captureRoot -Force | Out-Null
 
-$existing = @(Get-CimInstance Win32_Process -Filter "Name='dolby-probe.exe'" |
+$existing = @(Get-CimInstance Win32_Process `
+    -Filter "Name='SpatialAudioLab.CLI.exe' OR Name='dolby-probe.exe'" |
     Where-Object { $_.CommandLine -match '(?i)\blive-712\b' })
 if ($existing.Count -ne 0) {
     throw "live-712 is already running with PID(s): $($existing.ProcessId -join ', ')"

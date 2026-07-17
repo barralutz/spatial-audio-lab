@@ -12,7 +12,7 @@
     Version="1.0.0.0"
     ProcessorArchitecture="x64" />
   <Properties>
-    <DisplayName>Dolby Decoder Probe</DisplayName>
+    <DisplayName>SpatialAudioLab CLI</DisplayName>
     <PublisherDisplayName>barra</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
@@ -32,11 +32,11 @@
   <Applications>
     <Application
       Id="Probe"
-      Executable="dolby-probe.exe"
+      Executable="SpatialAudioLab.CLI.exe"
       EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements
-        DisplayName="Dolby Decoder Probe"
-        Description="Spatial audio transport probe"
+        DisplayName="SpatialAudioLab CLI"
+        Description="Spatial audio capture, diagnostics and routing engine"
         BackgroundColor="#20252B"
         Square150x150Logo="Assets\Square150x150Logo.png"
         Square44x44Logo="Assets\Square44x44Logo.png"
@@ -46,7 +46,7 @@
           Category="windows.appExecutionAlias"
           EntryPoint="Windows.FullTrustApplication">
           <uap3:AppExecutionAlias>
-            <desktop:ExecutionAlias Alias="dolby-probe-dtsx.exe" />
+            <desktop:ExecutionAlias Alias="spatial-audio-lab-cli.exe" />
           </uap3:AppExecutionAlias>
         </uap3:Extension>
       </Extensions>

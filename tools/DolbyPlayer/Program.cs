@@ -205,12 +205,12 @@ static void PrintChannelLevels(float[] pcm) {
 }
 
 static void PrintUsage() {
-    Console.Error.WriteLine("dolby-player inspect <media>");
-    Console.Error.WriteLine("dolby-player decode-test <media> [--audio-track N] [--start seconds]");
-    Console.Error.WriteLine("dolby-player audio-test <media> [--start seconds] [--gain 0..1] " +
+    Console.Error.WriteLine("SpatialAudioLab.Cinema inspect <media>");
+    Console.Error.WriteLine("SpatialAudioLab.Cinema decode-test <media> [--audio-track N] [--start seconds]");
+    Console.Error.WriteLine("SpatialAudioLab.Cinema audio-test <media> [--start seconds] [--gain 0..1] " +
                             "[--sink endpoint] [--stop-after seconds]");
-    Console.Error.WriteLine("dolby-player video-test <media> [--start seconds]");
-    Console.Error.WriteLine("dolby-player play <media> [--audio-track N] [--start seconds] [--gain 0..1] " +
+    Console.Error.WriteLine("SpatialAudioLab.Cinema video-test <media> [--start seconds]");
+    Console.Error.WriteLine("SpatialAudioLab.Cinema play <media> [--audio-track N] [--start seconds] [--gain 0..1] " +
                             "[--sink endpoint] [--av-delay-ms N] [--stop-after seconds]");
-    Console.Error.WriteLine("dolby-player self-test-audio <input.eac3|input.atmos> [seconds] [gain]");
+    Console.Error.WriteLine("SpatialAudioLab.Cinema self-test-audio <input.eac3|input.atmos> [seconds] [gain]");
 }

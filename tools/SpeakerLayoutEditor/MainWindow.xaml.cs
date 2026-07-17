@@ -108,7 +108,7 @@ public partial class MainWindow : Window {
             }
             directory = directory.Parent;
         }
-        throw new DirectoryNotFoundException("No se encontro la raiz de dolbyDecoder.");
+        throw new DirectoryNotFoundException("No se encontro la raiz de SpatialAudioLab.");
     }
 
     void LoadProfile(string path) {
@@ -138,7 +138,7 @@ public partial class MainWindow : Window {
     async Task RefreshEndpointsAsync() {
         RefreshEndpointsButton.IsEnabled = false;
         try {
-            string executable = IOPath.Combine(repoRoot, "build", "dolby-probe.exe");
+            string executable = IOPath.Combine(repoRoot, "build", "SpatialAudioLab.CLI.exe");
             if (!File.Exists(executable)) {
                 throw new FileNotFoundException("Ejecuta tools\\Build-DolbyProbe.ps1.", executable);
             }
@@ -341,8 +341,10 @@ public partial class MainWindow : Window {
             string value = File.ReadAllText(pidPath).Trim();
             if (!int.TryParse(value, out int processId)) return false;
             process = Process.GetProcessById(processId);
-            if (!process.HasExited && process.ProcessName.Equals(
-                    "dolby-probe", StringComparison.OrdinalIgnoreCase)) return true;
+            string processName = process.ProcessName;
+            if (!process.HasExited &&
+                (processName.Equals("SpatialAudioLab.CLI", StringComparison.OrdinalIgnoreCase) ||
+                 processName.Equals("dolby-probe", StringComparison.OrdinalIgnoreCase))) return true;
             process.Dispose();
             process = null;
             return false;
@@ -512,7 +514,7 @@ public partial class MainWindow : Window {
     async Task<ScriptResult> RunElevatedPowerShellScriptAsync(
             string scriptPath, string[] arguments) {
         string temporaryBase = IOPath.Combine(
-            IOPath.GetTempPath(), $"dolbyDecoder-{Guid.NewGuid():N}");
+            IOPath.GetTempPath(), $"SpatialAudioLab-{Guid.NewGuid():N}");
         string wrapperPath = temporaryBase + ".ps1";
         string outputPath = temporaryBase + ".log";
         try {
@@ -773,10 +775,10 @@ public partial class MainWindow : Window {
     async void TestSpeakerClick(object sender, RoutedEventArgs e) {
         if (document is null || selectedSpeaker is null || currentPath is null) return;
         if (!SaveProfile(currentPath)) return;
-        string executable = IOPath.Combine(repoRoot, "build", "dolby-probe.exe");
+        string executable = IOPath.Combine(repoRoot, "build", "SpatialAudioLab.CLI.exe");
         if (!File.Exists(executable)) {
             MessageBox.Show(this, "Ejecuta tools\\Build-DolbyProbe.ps1.",
-                "Falta dolby-probe.exe", MessageBoxButton.OK, MessageBoxImage.Warning);
+                "Falta SpatialAudioLab.CLI.exe", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
         try {

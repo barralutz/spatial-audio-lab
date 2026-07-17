@@ -10,7 +10,7 @@ internal sealed class MpvController : IAsyncDisposable {
     readonly string input;
     readonly double startSeconds;
     readonly bool headless;
-    readonly string pipeName = $"dolby-player-{Environment.ProcessId}-{Guid.NewGuid():N}";
+    readonly string pipeName = $"spatial-audio-lab-cinema-{Environment.ProcessId}-{Guid.NewGuid():N}";
     readonly SemaphoreSlim requestLock = new(1, 1);
     Process? process;
     NamedPipeClientStream? pipe;
@@ -37,7 +37,7 @@ internal sealed class MpvController : IAsyncDisposable {
         string startText = startSeconds.ToString("F6", System.Globalization.CultureInfo.InvariantCulture);
         List<string> arguments = new() {
             "--no-audio", "--pause=yes", "--keep-open=no",
-            "--hwdec=auto-safe", "--title=DolbyPlayer Atmos 7.1.4",
+            "--hwdec=auto-safe", "--title=SpatialAudioLab Cinema",
             $"--start={startText}", $"--input-ipc-server=\\\\.\\pipe\\{pipeName}", input
         };
         arguments.Insert(2, headless ? "--vo=null" : "--force-window=yes");

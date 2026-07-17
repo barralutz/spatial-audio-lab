@@ -20,9 +20,9 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 }
 
 $repoRoot = Split-Path $PSScriptRoot -Parent
-$probe = Join-Path $repoRoot 'build\dolby-probe.exe'
+$probe = Join-Path $repoRoot 'build\SpatialAudioLab.CLI.exe'
 if (-not (Test-Path $probe)) {
-    throw "dolby-probe.exe was not found. Run tools\Build-DolbyProbe.ps1 first."
+    throw "SpatialAudioLab.CLI.exe was not found. Run tools\Build-DolbyProbe.ps1 first."
 }
 
 $captureRoot = Join-Path $repoRoot 'captures'

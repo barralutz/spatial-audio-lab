@@ -1,7 +1,7 @@
 <Window x:Class="SpeakerLayoutEditor.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Spatial Speaker Layout" Width="1440" Height="760"
+        Title="SpatialAudioLab Studio" Width="1440" Height="760"
         WindowStartupLocation="CenterScreen"
         MinWidth="1180" MinHeight="640" Background="#F3F5F6"
         FontFamily="Segoe UI" FontSize="13">

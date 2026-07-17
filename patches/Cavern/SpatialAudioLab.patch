@@ -1,0 +1,58 @@
+diff --git a/Cavern.Format/Decoders/EnhancedAC3/JointObjectCodingApplier.cs b/Cavern.Format/Decoders/EnhancedAC3/JointObjectCodingApplier.cs
+index a7a537d..f1ad6a5 100644
+--- a/Cavern.Format/Decoders/EnhancedAC3/JointObjectCodingApplier.cs
++++ b/Cavern.Format/Decoders/EnhancedAC3/JointObjectCodingApplier.cs
+@@ -127,7 +127,7 @@ namespace Cavern.Format.Decoders.EnhancedAC3 {
+             }
+             taskWaiter.Wait();
+ 
+-            if (++timeslot == input.Length) {
++            if (++timeslot == frameSize / QuadratureMirrorFilterBank.subbands) {
+                 timeslot = 0;
+             }
+             return timeslotCache;
+@@ -218,4 +218,4 @@ namespace Cavern.Format.Decoders.EnhancedAC3 {
+             }
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/Cavern.Format/Renderers/EnhancedAC3Renderer.cs b/Cavern.Format/Renderers/EnhancedAC3Renderer.cs
+index 4075906..c2d3854 100644
+--- a/Cavern.Format/Renderers/EnhancedAC3Renderer.cs
++++ b/Cavern.Format/Renderers/EnhancedAC3Renderer.cs
+@@ -217,8 +217,8 @@ namespace Cavern.Format.Renderers {
+ 
+         /// <inheritdoc/>
+         public override void Dispose() {
+-            applier.Dispose();
++            applier?.Dispose();
+             base.Dispose();
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/Cavern.Format/Utilities/BlockBuffer.cs b/Cavern.Format/Utilities/BlockBuffer.cs
+index 565bac0..5b9d906 100644
+--- a/Cavern.Format/Utilities/BlockBuffer.cs
++++ b/Cavern.Format/Utilities/BlockBuffer.cs
+@@ -157,7 +157,9 @@ namespace Cavern.Format.Utilities {
+ 
+                 pointer += next;
+                 lastFetchPosition += next;
+-                if (lastFetchPosition == LastFetch.Length) {
++                // Don't prefetch after an exact read. Some packet fetchers update metadata,
++                // which must remain associated with the samples just returned.
++                if (lastFetchPosition == LastFetch.Length && pointer < elements) {
+                     LastFetch = Fetcher();
+                     if (LastFetch == null || LastFetch.Length == 0) {
+                         Array.Clear(result, pointer, result.Length - pointer);
+@@ -193,4 +195,4 @@ namespace Cavern.Format.Utilities {
+             Clear();
+         }
+     }
+-}
+\ No newline at end of file
++}

@@ -11,7 +11,8 @@ if (Test-Path $pidFile) {
     $storedPid = (Get-Content $pidFile -Raw).Trim()
     if ($storedPid -match '^\d+$') { $processIds += [int]$storedPid }
 }
-$processIds += @(Get-CimInstance Win32_Process -Filter "Name='dolby-probe.exe'" |
+$processIds += @(Get-CimInstance Win32_Process `
+    -Filter "Name='SpatialAudioLab.CLI.exe' OR Name='dolby-probe.exe'" |
     Where-Object { $_.CommandLine -match '(?i)\blive-pcm-layout\b' } |
     Select-Object -ExpandProperty ProcessId)
 $processIds = @($processIds | Sort-Object -Unique)

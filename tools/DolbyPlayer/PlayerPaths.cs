@@ -13,7 +13,7 @@ internal sealed class PlayerPaths {
             current = current.Parent;
         }
         RepoRoot = current?.FullName ?? throw new DirectoryNotFoundException(
-            "Could not locate the dolbyDecoder repository root.");
+            "Could not locate the SpatialAudioLab repository root.");
         TrueHdStream = Path.Combine(RepoRoot, "tools", "truehdd", "truehd-stream.exe");
         Mpv = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
             "MPV Player", "mpv.exe");

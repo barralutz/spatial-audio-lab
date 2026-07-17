@@ -106,4 +106,4 @@ if (-not $KeepIntermediate) {
 }
 
 Write-Host "Ready for analog playback: $wavePath"
-Write-Host "Play with: .\build\dolby-probe.exe play-712 `"$wavePath`" `"Altavoces (Realtek(R) Audio)`" `"2nd output`" 0.5 1"
+Write-Host "Play with: .\build\SpatialAudioLab.CLI.exe play-712 `"$wavePath`" `"Altavoces (Realtek(R) Audio)`" `"2nd output`" 0.5 1"
