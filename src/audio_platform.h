@@ -107,6 +107,8 @@ double Decibels(double linear);
 std::vector<Endpoint> EnumerateRenderEndpoints();
 Endpoint SelectEndpoint(const std::wstring& filter);
 void SetDefaultEndpoint(const std::wstring& filter);
+void SetNativePcm714Format(const std::wstring& filter);
+void SetSpatialCodecFormat(const std::wstring& filter, bool dtsX);
 void PrintConfiguredFormats(const std::wstring& filter);
 void PrintEndpoint(const Endpoint& endpoint);
 

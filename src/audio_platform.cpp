@@ -219,6 +219,103 @@ void SetDefaultEndpoint(const std::wstring& filter) {
                << L"ID: " << endpoint.id << L"\n";
 }
 
+void SetNativePcm714Format(const std::wstring& filter) {
+    constexpr DWORD channelMask = 0x0002D63F;
+    Endpoint endpoint = SelectEndpoint(filter);
+    WAVEFORMATEXTENSIBLE pcm{};
+    pcm.Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
+    pcm.Format.nChannels = 12;
+    pcm.Format.nSamplesPerSec = 48'000;
+    pcm.Format.wBitsPerSample = 16;
+    pcm.Format.nBlockAlign = 24;
+    pcm.Format.nAvgBytesPerSec = 1'152'000;
+    pcm.Format.cbSize = sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX);
+    pcm.Samples.wValidBitsPerSample = 16;
+    pcm.dwChannelMask = channelMask;
+    pcm.SubFormat = kPcm;
+    WAVEFORMATEXTENSIBLE mix{};
+    mix.Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
+    mix.Format.nSamplesPerSec = 48'000;
+    mix.Format.wBitsPerSample = 32;
+    mix.Format.cbSize = sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX);
+    mix.Samples.wValidBitsPerSample = 32;
+    mix.SubFormat = kIeeeFloat;
+    mix.Format.nChannels = 12;
+    mix.Format.nBlockAlign = 48;
+    mix.Format.nAvgBytesPerSec = 2'304'000;
+    mix.dwChannelMask = channelMask;
+
+    ComPtr<IAudioClient> client;
+    ThrowIfFailed(endpoint.device->Activate(__uuidof(IAudioClient), CLSCTX_ALL,
+                                             nullptr, &client),
+                  "Activate PCM 7.1.4 endpoint");
+    const HRESULT support = client->IsFormatSupported(
+        AUDCLNT_SHAREMODE_EXCLUSIVE, &pcm.Format, nullptr);
+    if (support != S_OK) {
+        ThrowIfFailed(support, "Validate selected endpoint format");
+        throw std::runtime_error("The endpoint did not accept the selected format exactly");
+    }
+
+    ComPtr<IPolicyConfig> policy;
+    ThrowIfFailed(CoCreateInstance(__uuidof(PolicyConfigClient), nullptr, CLSCTX_ALL,
+                                   IID_PPV_ARGS(&policy)),
+                  "Create audio policy client");
+    ThrowIfFailed(policy->SetDeviceFormat(endpoint.id.c_str(),
+                                           &pcm.Format, &mix.Format),
+                  "Set native PCM 7.1.4 endpoint format");
+    std::wcout << L"Native PCM 7.1.4 device and mix format selected: "
+               << endpoint.name << L"\n"
+               << L"ID: " << endpoint.id << L"\n";
+}
+
+void SetSpatialCodecFormat(const std::wstring& filter, const bool dtsX) {
+    Endpoint endpoint = SelectEndpoint(filter);
+    WAVEFORMATEXTENSIBLE carrier{};
+    carrier.Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
+    carrier.Format.nChannels = 8;
+    carrier.Format.nSamplesPerSec = 192'000;
+    carrier.Format.nAvgBytesPerSec = 3'072'000;
+    carrier.Format.nBlockAlign = 16;
+    carrier.Format.wBitsPerSample = 16;
+    carrier.Format.cbSize = sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX);
+    carrier.Samples.wValidBitsPerSample = 16;
+    carrier.dwChannelMask = KSAUDIO_SPEAKER_7POINT1_SURROUND;
+    carrier.SubFormat = dtsX ? kDtsXE1 : kDolbyMat21Profile3;
+    WAVEFORMATEXTENSIBLE mix{};
+    mix.Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
+    mix.Format.nChannels = 8;
+    mix.Format.nSamplesPerSec = 48'000;
+    mix.Format.nAvgBytesPerSec = 1'536'000;
+    mix.Format.nBlockAlign = 32;
+    mix.Format.wBitsPerSample = 32;
+    mix.Format.cbSize = sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX);
+    mix.Samples.wValidBitsPerSample = 32;
+    mix.dwChannelMask = KSAUDIO_SPEAKER_7POINT1_SURROUND;
+    mix.SubFormat = kIeeeFloat;
+
+    ComPtr<IAudioClient> client;
+    ThrowIfFailed(endpoint.device->Activate(__uuidof(IAudioClient), CLSCTX_ALL,
+                                             nullptr, &client),
+                  "Activate spatial codec endpoint");
+    const HRESULT support = client->IsFormatSupported(
+        AUDCLNT_SHAREMODE_EXCLUSIVE, &carrier.Format, nullptr);
+    if (support != S_OK) {
+        ThrowIfFailed(support, "Validate spatial codec endpoint format");
+        throw std::runtime_error("The endpoint did not accept the spatial codec format exactly");
+    }
+
+    ComPtr<IPolicyConfig> policy;
+    ThrowIfFailed(CoCreateInstance(__uuidof(PolicyConfigClient), nullptr, CLSCTX_ALL,
+                                   IID_PPV_ARGS(&policy)),
+                  "Create audio policy client");
+    ThrowIfFailed(policy->SetDeviceFormat(endpoint.id.c_str(),
+                                           &carrier.Format, &mix.Format),
+                  "Set spatial codec endpoint format");
+    std::wcout << (dtsX ? L"DTS:X E1" : L"Dolby MAT 2.1 Profile 3")
+               << L" device format and 7.1 mix selected: " << endpoint.name << L"\n"
+               << L"ID: " << endpoint.id << L"\n";
+}
+
 namespace {
 
 void PrintPolicyFormat(const wchar_t* label, const HRESULT result, WAVEFORMATEX* format) {
@@ -370,6 +467,11 @@ void PrintEndpoint(const Endpoint& endpoint) {
     const auto pcm20 = MakePcmFormat(2, KSAUDIO_SPEAKER_STEREO);
     const auto pcm51 = MakePcmFormat(6, KSAUDIO_SPEAKER_5POINT1);
     const auto pcm71 = MakePcmFormat(8, KSAUDIO_SPEAKER_7POINT1_SURROUND);
+    auto pcm714 = MakePcmFormat(12, 0x0002D63F);
+    pcm714.Format.wBitsPerSample = 16;
+    pcm714.Format.nBlockAlign = 24;
+    pcm714.Format.nAvgBytesPerSec = 1'152'000;
+    pcm714.Samples.wValidBitsPerSample = 16;
     const auto ddp = MakeDolbyDigitalPlusFormat(kDolbyDigitalPlus);
     const auto ddpAtmos = MakeDolbyDigitalPlusFormat(kDolbyDigitalPlusAtmos);
     const auto mat10 = MakeIec61937Format(kDolbyMlpMat10);
@@ -388,6 +490,7 @@ void PrintEndpoint(const Endpoint& endpoint) {
     PrintFormatProbe(client.Get(), L"PCM 2.0 / 48 kHz / 24-in-32", &pcm20.Format);
     PrintFormatProbe(client.Get(), L"PCM 5.1 / 48 kHz / 24-in-32", &pcm51.Format);
     PrintFormatProbe(client.Get(), L"PCM 7.1 / 48 kHz / 24-in-32", &pcm71.Format);
+    PrintFormatProbe(client.Get(), L"PCM 7.1.4 / 48 kHz / 16 bit", &pcm714.Format);
     PrintFormatProbe(client.Get(), L"Dolby Digital Plus", &ddp.formatExt.Format);
     PrintFormatProbe(client.Get(), L"Dolby Atmos (DD+)", &ddpAtmos.formatExt.Format);
     PrintFormatProbe(client.Get(), L"Dolby MLP / MAT 1.0", &mat10.formatExt.Format);

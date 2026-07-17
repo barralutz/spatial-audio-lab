@@ -30,6 +30,8 @@ void PrintUsage() {
         << L"dolby-probe list\n"
         << L"dolby-probe list-endpoints\n"
         << L"dolby-probe set-default [endpoint-filter]\n"
+        << L"dolby-probe set-pcm714-format [endpoint-filter]\n"
+        << L"dolby-probe set-codec-format <atmos|dtsx> [endpoint-filter]\n"
         << L"dolby-probe device-format [endpoint-filter]\n"
         << L"dolby-probe render-test [seconds] [endpoint-filter] [pcm|mat20|mat21]\n"
         << L"dolby-probe replay-iec61937 input.wav [endpoint-filter] [repeat]\n"
@@ -99,6 +101,23 @@ int wmain(const int argc, wchar_t** argv) {
         if (command == L"set-default") {
             const std::wstring filter = argc >= 3 ? argv[2] : L"SinkDescription Sample";
             SetDefaultEndpoint(filter);
+            return 0;
+        }
+
+        if (command == L"set-pcm714-format") {
+            const std::wstring filter = argc >= 3 ? argv[2] : L"SinkDescription Sample";
+            SetNativePcm714Format(filter);
+            return 0;
+        }
+
+        if (command == L"set-codec-format") {
+            if (argc < 3) throw std::invalid_argument("set-codec-format requires atmos or dtsx");
+            const std::wstring mode = Lowercase(argv[2]);
+            if (mode != L"atmos" && mode != L"dtsx") {
+                throw std::invalid_argument("set-codec-format requires atmos or dtsx");
+            }
+            const std::wstring filter = argc >= 4 ? argv[3] : L"SinkDescription Sample";
+            SetSpatialCodecFormat(filter, mode == L"dtsx");
             return 0;
         }
 

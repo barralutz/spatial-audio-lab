@@ -94,14 +94,21 @@ evita iniciar un puente que quedaria mudo cuando `Formato` y el renderer espacia
 `tools\Set-SpatialProvider.ps1` automatiza el cambio. Primero solicita el formato mediante
 `SpatialAudioDeviceConfiguration`. En la compilacion actual de Windows esa API devuelve
 `AccessDenied` o `NotSupportedOnAudioEndpoint` para este endpoint SysVAD, aunque ambos proveedores
-estan instalados. La ruta de recuperacion conserva los cinco valores espaciales anteriores,
-configura GUID, mascara, numero de objetos y carrier del proveedor solicitado, y reconstruye
-`AudioEndpointBuilder`/`Audiosrv`. Windows vuelve con MAT 2.1 Profile 3 para Atmos o DTS:X E1 sin
-reiniciar el dispositivo. `pnputil /restart-device ROOT\MEDIA\0001` queda como segunda opcion si
-la reconstruccion de servicios no basta; esto evita acumular reenumeraciones cuando Windows marca
-el dispositivo con un reinicio pendiente. Si la validacion posterior falla, el script restaura el
-estado completo anterior y reconstruye nuevamente la pila. No hace falta reiniciar Windows ni
-manipular manualmente `Formato` y `Sonido espacial`.
+estan instalados. La ruta de recuperacion conserva los cinco valores espaciales anteriores y hace
+el cambio en dos fases. Primero desactiva el proveedor y reconstruye `AudioEndpointBuilder` y
+`Audiosrv`; con el proveedor apagado, configura mediante `IPolicyConfig::SetDeviceFormat` el carrier
+persistido (`WAVEFORMATEXTENSIBLE`, `cbSize=22`) y la mezcla 7.1. Luego escribe la plantilla exacta
+del proveedor, con GUID, mascara y numero de objetos, y vuelve a reconstruir los servicios. El
+resultado es MAT 2.1 Profile 3 para Atmos o DTS:X E1. Para PCM se desactiva el proveedor y se
+negocian directamente dispositivo y mezcla PCM 7.1.4 de doce canales.
+
+El panel moderno de Windows puede mostrar Atmos despues de configurar solamente carrier y mezcla,
+mientras el panel clasico vuelve a 16 bit y el proveedor sigue desactivado. Por eso el texto del
+panel no se usa como prueba: el script exige abrir un stream espacial real y valida firma, objetos y
+formato efectivo. `pnputil /restart-device ROOT\MEDIA\0001` queda como segunda opcion si las
+reconstrucciones de servicios no bastan. Si la validacion posterior falla, el script restaura los
+cinco valores anteriores, reconstruye la pila y restablece el par PCM cuando corresponda. No hace
+falta reiniciar Windows ni manipular manualmente `Formato` y `Sonido espacial`.
 
 Esta ruta usa propiedades privadas de MMDevices observadas en Windows `10.0.26200.8655`; es una
 solucion experimental ligada al endpoint SysVAD de prueba, no una API publica portable. El audio
@@ -186,6 +193,11 @@ El paquete `oem123.inf`, version `2.55.40.516` del 17/07/2026, contiene el endpo
 ring v3. Windows lo dejo staged y marco el dispositivo con reinicio pendiente; la primera validacion
 requiere reiniciar con F7. Despues del arranque, el recorrido controlado es iniciar el puente PCM y
 ejecutar `spatial-test ... 714`: los doce medidores deben responder sin etapas Dolby/DTS.
+
+La validacion final recorrio `DTS:X -> PCM -> Atmos -> DTS:X -> PCM` sin seleccion manual. Atmos
+abrio MAT con mascara `0xC1FFE` y 20 objetos; DTS:X abrio E1 con `0xFFFFE` y 32 objetos; PCM abrio
+doce canales con mascara `0x2D63F` y cero objetos dinamicos. Una señal 7.1.4 activo ademas los doce
+medidores, incluidos `TFL`, `TFR`, `TBL` y `TBR`, a aproximadamente -25 dB.
 
 ## Salida GPU dedicada
 

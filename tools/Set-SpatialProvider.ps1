@@ -168,68 +168,38 @@ function Set-Bytes([byte[]]$Destination, [int]$Offset, [byte[]]$Source) {
     [Array]::Copy($Source, 0, $Destination, $Offset, $Source.Length)
 }
 
-function New-SpatialActiveConfiguration(
-        [byte[]]$Current,
-        [Guid]$Format,
-        [uint32]$StaticMask,
-        [uint32]$DynamicObjects) {
-    if ($Current.Length -ge 40 -and $Current[0] -eq 0x41) {
-        $result = [byte[]]$Current.Clone()
+function Get-SpatialRegistryTemplate([string]$RequestedMode) {
+    $guid = if ($RequestedMode -eq 'Atmos') {
+        '5D7389A23EFA354E9D7DB6F896ACB2E7'
     } else {
-        $result = [SpatialRegistryAccess]::FromHex(
-            '41000000010000000200005A5D7389A23EFA354E9D7DB6F896ACB2E7' +
-            'FE1F0C000100000014000000' +
+        '4A1B201022336749BF402CAA9BAFCA44'
+    }
+    $objectState = if ($RequestedMode -eq 'Atmos') {
+        'FE1F0C000100000014000000'
+    } else {
+        'FEFF0F000100000020000000'
+    }
+    $carrierSubtype = if ($RequestedMode -eq 'Atmos') { '0C030000' } else { '0B010000' }
+
+    [pscustomobject]@{
+        Enabled = [SpatialRegistryAccess]::FromHex('02000000010000000100')
+        Active = [SpatialRegistryAccess]::FromHex(
+            '41000000010000000200005A' + $guid + $objectState +
             'A0400000A0400000A0400000000000000000000000000000F0410000' +
             'B442000007430000344200003442000007430000803F0000803F0000' +
             '803F0000803F0000803F0000803F0000803F0000803F96433B3FBF' +
             '0E1C3F0000803FBF0E1C3FD39FFD3ED39FFD3E0000803F00000000' +
             '00000000')
-    }
-    Set-Bytes $result 12 $Format.ToByteArray()
-    Set-Bytes $result 28 ([BitConverter]::GetBytes($StaticMask))
-    Set-Bytes $result 32 ([BitConverter]::GetBytes([uint32]1))
-    Set-Bytes $result 36 ([BitConverter]::GetBytes($DynamicObjects))
-    return $result
-}
-
-function New-SpatialProviderState([byte[]]$Current, [Guid]$Format) {
-    if ($Current.Length -ge 56 -and $Current[0] -eq 0x41) {
-        $result = [byte[]]$Current.Clone()
-    } else {
-        $result = [SpatialRegistryAccess]::FromHex(
+        Provider = [SpatialRegistryAccess]::FromHex(
             '41000000010000000200005A010000000000000001000000' +
-            '5D7389A23EFA354E9D7DB6F896ACB2E7' +
-            '5D7389A23EFA354E9D7DB6F896ACB2E7' +
+            $guid + $guid +
             '00000000000000000000000000000000010000000000000001000000')
-    }
-    Set-Bytes $result 24 $Format.ToByteArray()
-    Set-Bytes $result 40 $Format.ToByteArray()
-    return $result
-}
-
-function New-SpatialSelection([byte[]]$Current, [Guid]$Format) {
-    if ($Current.Length -ge 32 -and $Current[0] -eq 0x41) {
-        $result = [byte[]]$Current.Clone()
-    } else {
-        $result = [SpatialRegistryAccess]::FromHex(
-            '41000000010000000000000000000000' +
-            '5D7389A23EFA354E9D7DB6F896ACB2E7')
-    }
-    Set-Bytes $result 16 $Format.ToByteArray()
-    return $result
-}
-
-function New-SpatialCarrier([byte[]]$Current, [string]$RequestedMode) {
-    if ($Current.Length -ge 48 -and $Current[0] -eq 0x41) {
-        $result = [byte[]]$Current.Clone()
-    } else {
-        $result = [SpatialRegistryAccess]::FromHex(
+        Selection = [SpatialRegistryAccess]::FromHex(
+            '41000000010000000000000000000000' + $guid)
+        Carrier = [SpatialRegistryAccess]::FromHex(
             '4100000001000000FEFF080000EE020000E02E001000100016001000' +
-            '3F0600000C030000EA0C1000800000AA00389B71')
+            '3F060000' + $carrierSubtype + 'EA0C1000800000AA00389B71')
     }
-    [uint32]$carrierSubtype = if ($RequestedMode -eq 'Atmos') { 0x030C } else { 0x010B }
-    Set-Bytes $result 32 ([BitConverter]::GetBytes($carrierSubtype))
-    return $result
 }
 
 function Write-NativePcmRegistryState(
@@ -251,32 +221,53 @@ function Write-NativePcmRegistryState(
     Set-Bytes $selection 0 `
         ([SpatialRegistryAccess]::FromHex('41000000010000000000000000000000'))
     [SpatialRegistryAccess]::SetBinary($RegistrySubKey, $ValueNames[3], $selection)
+}
 
-    [SpatialRegistryAccess]::SetBinary($RegistrySubKey, $ValueNames[4],
-        [SpatialRegistryAccess]::FromHex(
-            '4100000001000000FEFF0C0080BB0000009411001800100016001000' +
-            '3FD602000100000000001000800000AA00389B71'))
+function Set-NativePcmDeviceFormat {
+    $output = @(& $exe set-pcm714-format $EndpointFilter 2>&1 |
+        ForEach-Object { "$_" })
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not negotiate native PCM 7.1.4.`n$($output -join "`n")"
+    }
+    $output | ForEach-Object { if ($_ -ne '') { Write-Host $_ } }
+}
+
+function Set-SpatialCodecDeviceFormat([string]$RequestedMode) {
+    $codec = if ($RequestedMode -eq 'Atmos') { 'atmos' } else { 'dtsx' }
+    $output = @(& $exe set-codec-format $codec $EndpointFilter 2>&1 |
+        ForEach-Object { "$_" })
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not negotiate the $RequestedMode device and mix formats.`n" +
+            ($output -join "`n")
+    }
+    $output | ForEach-Object { if ($_ -ne '') { Write-Host $_ } }
+}
+
+function Get-SpatialRegistryMode(
+        [hashtable]$Values,
+        [string[]]$ValueNames) {
+    $enabled = $Values[$ValueNames[0]]
+    if ($enabled.Length -lt 9 -or $enabled[8] -eq 0) { return 'Pcm' }
+
+    $carrier = $Values[$ValueNames[4]]
+    if ($carrier.Length -lt 36) { return $null }
+    switch ([BitConverter]::ToUInt32($carrier, 32)) {
+        0x030C { return 'Atmos' }
+        0x010B { return 'DtsX' }
+        default { return $null }
+    }
 }
 
 function Write-SpatialRegistryState(
         [string]$RegistrySubKey,
         [string[]]$ValueNames,
-        [hashtable]$Original,
-        [string]$RequestedMode,
-        [Guid]$Format,
-        [uint32]$StaticMask,
-        [uint32]$DynamicObjects) {
-    [SpatialRegistryAccess]::SetBinary($RegistrySubKey, $ValueNames[0],
-        [byte[]](0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00))
-    [SpatialRegistryAccess]::SetBinary($RegistrySubKey, $ValueNames[1],
-        (New-SpatialActiveConfiguration $Original[$ValueNames[1]] `
-            $Format $StaticMask $DynamicObjects))
-    [SpatialRegistryAccess]::SetBinary($RegistrySubKey, $ValueNames[2],
-        (New-SpatialProviderState $Original[$ValueNames[2]] $Format))
-    [SpatialRegistryAccess]::SetBinary($RegistrySubKey, $ValueNames[3],
-        (New-SpatialSelection $Original[$ValueNames[3]] $Format))
-    [SpatialRegistryAccess]::SetBinary($RegistrySubKey, $ValueNames[4],
-        (New-SpatialCarrier $Original[$ValueNames[4]] $RequestedMode))
+        [string]$RequestedMode) {
+    $values = Get-SpatialRegistryTemplate $RequestedMode
+    [SpatialRegistryAccess]::SetBinary($RegistrySubKey, $ValueNames[0], $values.Enabled)
+    [SpatialRegistryAccess]::SetBinary($RegistrySubKey, $ValueNames[1], $values.Active)
+    [SpatialRegistryAccess]::SetBinary($RegistrySubKey, $ValueNames[2], $values.Provider)
+    [SpatialRegistryAccess]::SetBinary($RegistrySubKey, $ValueNames[3], $values.Selection)
+    [SpatialRegistryAccess]::SetBinary($RegistrySubKey, $ValueNames[4], $values.Carrier)
 }
 
 function Wait-SpatialEndpoint {
@@ -329,37 +320,34 @@ function Set-SpatialRegistryFallback([string]$RequestedMode) {
     foreach ($name in $valueNames) {
         $original[$name] = [SpatialRegistryAccess]::GetBinary($registrySubKey, $name)
     }
-
-    $format = if ($RequestedMode -eq 'Atmos') {
-        $atmosFormat
-    } elseif ($RequestedMode -eq 'DtsX') {
-        $dtsXFormat
-    } else {
-        [Guid]::Empty
-    }
-    [uint32]$staticMask = if ($RequestedMode -eq 'Atmos') { 0xC1FFE } else { 0xFFFFE }
-    [uint32]$dynamicObjects = if ($RequestedMode -eq 'Atmos') { 20 } else { 32 }
+    $originalMode = Get-SpatialRegistryMode $original $valueNames
 
     try {
         if ($RequestedMode -eq 'Pcm') {
             Write-NativePcmRegistryState $registrySubKey $valueNames $original
+            Write-Host 'Rebuilding the audio services for native PCM 7.1.4.'
+            Restart-AudioServices
+            Set-NativePcmDeviceFormat
         } else {
-            Write-SpatialRegistryState $registrySubKey $valueNames $original `
-                $RequestedMode $format $staticMask $dynamicObjects
+            Write-Host "Disabling the current spatial provider before selecting $RequestedMode."
+            Write-NativePcmRegistryState $registrySubKey $valueNames $original
+            Restart-AudioServices
+            Set-SpatialCodecDeviceFormat $RequestedMode
+            Write-SpatialRegistryState $registrySubKey $valueNames $RequestedMode
+            Write-Host "Rebuilding the audio services for $RequestedMode."
+            Restart-AudioServices
         }
 
-        Write-Host "Windows rejected the public $RequestedMode switch; rebuilding the audio services."
-        Restart-AudioServices
         $verified = Wait-SpatialPreflight $RequestedMode
         if (-not $verified.Ready) {
             Write-Warning 'The service restart was insufficient; trying device reenumeration.'
             if ($RequestedMode -eq 'Pcm') {
                 Write-NativePcmRegistryState $registrySubKey $valueNames $original
             } else {
-                Write-SpatialRegistryState $registrySubKey $valueNames $original `
-                    $RequestedMode $format $staticMask $dynamicObjects
+                Write-SpatialRegistryState $registrySubKey $valueNames $RequestedMode
             }
             Restart-SpatialDevice
+            if ($RequestedMode -eq 'Pcm') { Set-NativePcmDeviceFormat }
             $verified = Wait-SpatialPreflight $RequestedMode
             if (-not $verified.Ready) {
                 throw "$RequestedMode did not become ready.`n$($verified.Output -join "`n")"
@@ -374,6 +362,7 @@ function Set-SpatialRegistryFallback([string]$RequestedMode) {
         }
         try {
             Restart-AudioServices
+            if ($originalMode -eq 'Pcm') { Set-NativePcmDeviceFormat }
         } catch {
             try { Restart-SpatialDevice } catch { Write-Warning "Rollback restart failed: $_" }
         }
