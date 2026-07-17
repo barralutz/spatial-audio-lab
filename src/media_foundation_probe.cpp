@@ -1,4 +1,5 @@
 #include "audio_platform.h"
+#include "bridge_meter.h"
 #include "commands.h"
 #include "mat_capture_client.h"
 #include "mat_format.h"
@@ -1559,6 +1560,7 @@ void PlayLiveDtsXLayout(const double seconds,
     MediaFoundationSession mediaFoundation;
     const SpeakerLayout layout = LoadSpeakerLayout(layoutPath);
     WinHandle device = OpenMatCaptureDevice();
+    BridgeMeterPublisher meters(layout, BridgeMeterMode::DtsX);
     MultiEndpointRenderer renderer(layout, gain);
     DtsXSpatialDecoder decoder(layout);
     ResetMatCapture(device.Get());
@@ -1619,7 +1621,10 @@ void PlayLiveDtsXLayout(const double seconds,
                     auto frames = framer.Push(read.payload, read.header.PayloadBytes);
                     for (const auto& frame : frames) {
                         auto pcm = decoder.Push(frame);
-                        if (!pcm.empty()) queue.Append(std::move(pcm));
+                        if (!pcm.empty()) {
+                            meters.Update(pcm);
+                            queue.Append(std::move(pcm));
+                        }
                     }
                     maximumQueuedFrames = std::max(
                         maximumQueuedFrames, renderer.MinimumFramesAvailable(queue));
@@ -1629,7 +1634,10 @@ void PlayLiveDtsXLayout(const double seconds,
 
             if (!acceptingInput && !decoderDrained) {
                 auto pcm = decoder.Drain();
-                if (!pcm.empty()) queue.Append(std::move(pcm));
+                if (!pcm.empty()) {
+                    meters.Update(pcm);
+                    queue.Append(std::move(pcm));
+                }
                 decoderDrained = true;
             }
 

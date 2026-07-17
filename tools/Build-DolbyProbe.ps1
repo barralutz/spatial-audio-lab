@@ -17,6 +17,7 @@ New-Item -ItemType Directory -Path $buildRoot, $publishRoot -Force | Out-Null
 
 $sources = @(
     'audio_platform.cpp',
+    'bridge_meter.cpp',
     'capture_commands.cpp',
     'dolby_probe.cpp',
     'dtsx_analysis.cpp',

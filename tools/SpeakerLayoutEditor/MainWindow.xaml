@@ -358,6 +358,10 @@
                     <TextBlock Text="Abrir registro" />
                   </StackPanel>
                 </Button>
+
+                <TextBlock Text="NIVELES DE CANAL" FontSize="11" FontWeight="SemiBold"
+                           Foreground="#59636A" Margin="0,18,0,8" />
+                <UniformGrid x:Name="BridgeMeterPanel" Columns="2" />
               </StackPanel>
             </ScrollViewer>
           </TabItem>

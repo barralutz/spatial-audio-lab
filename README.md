@@ -80,6 +80,11 @@ controla ganancia, prebuffer y duracion, muestra el PID activo y abre su registr
 esta ejecutandose, el editor selecciona su modo, bloquea el arranque del otro y dirige `Detener` al
 proceso activo. El puente se ejecuta como proceso independiente y continua activo al cerrar el
 editor; si hace falta elevacion, Windows solicita UAC al ejecutar el script correspondiente.
+La misma pestaña muestra RMS suavizado y retencion de pico para cada canal logico del perfil. Los
+medidores se toman despues del decoder y antes de la ganancia global, trims y distribucion entre
+endpoints, por lo que permiten distinguir si el contenido realmente activa `TFL/TFR/TBL/TBR`. El
+puente publica los niveles por memoria compartida, el editor los actualiza cada 100 ms y los limpia
+si no recibe datos nuevos durante 500 ms.
 
 ```powershell
 .\tools\Build-DolbyProbe.ps1
@@ -446,6 +451,7 @@ Capturas de referencia:
 - `src/wave_io.*`: lectura y escritura RIFF/WAVE compartida por capturas y extractores.
 - `src/capture_commands.cpp`: pruebas de transporte, Spatial Sound y loopback WASAPI.
 - `src/mat_capture_client.*`: cliente IOCTL del ring `\\.\DolbyDecoderMat`.
+- `src/bridge_meter.*`: telemetria RMS/pico por canal compartida por los puentes MAT y DTS:X.
 - `src/media_foundation_probe.cpp`: enumeracion de MFTs, licencia, decoder incremental y puente
   analogico DTS:X.
 - `src/spatial_audio_sample.*`: implementacion caller-owned de muestras y objetos espaciales MF.
@@ -456,7 +462,7 @@ Capturas de referencia:
 - `src/speaker_layout.*`: parser/validador de perfiles y paneo segun posiciones fisicas.
 - `src/multi_endpoint_renderer.*`: WASAPI multidispositivo, colas, relojes y resampling adaptativo.
 - `configs/realtek-c1u-714.ini`: cama Realtek 7.1, techo frontal C-1U y techo trasero Realtek.
-- `tools/SpeakerLayoutEditor`: editor grafico WPF del perfil de parlantes y salidas.
+- `tools/SpeakerLayoutEditor`: editor grafico WPF del perfil, salidas, puentes y medidores de canal.
 - `tools/Start-Live714.ps1` / `tools/Stop-Live714.ps1`: administran el puente MAT 7.1.4.
 - `tools/Start-LiveDtsX714.ps1` / `tools/Stop-LiveDtsX714.ps1`: administran el puente DTS:X 7.1.4.
 - `build/dolby-probe.exe`: binario Windows ya compilado en esta maquina.

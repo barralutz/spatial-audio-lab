@@ -50,6 +50,12 @@ public partial class MainWindow : Window {
     readonly DispatcherTimer bridgeStatusTimer = new() {
         Interval = TimeSpan.FromSeconds(1)
     };
+    readonly DispatcherTimer meterTimer = new() {
+        Interval = TimeSpan.FromMilliseconds(100)
+    };
+    readonly BridgeMeterReader meterReader = new();
+    readonly Dictionary<string, ChannelMeterControl> channelMeters =
+        new(StringComparer.OrdinalIgnoreCase);
     LayoutDocument? document;
     SpeakerDefinition? selectedSpeaker;
     string? currentPath;
@@ -68,8 +74,13 @@ public partial class MainWindow : Window {
         PhysicalDestinationCombo.ItemsSource = physicalDestinationChoices;
         repoRoot = FindRepoRoot();
         Loaded += WindowLoaded;
-        Closed += (_, _) => bridgeStatusTimer.Stop();
+        Closed += (_, _) => {
+            bridgeStatusTimer.Stop();
+            meterTimer.Stop();
+            meterReader.Dispose();
+        };
         bridgeStatusTimer.Tick += (_, _) => UpdateBridgeStatus();
+        meterTimer.Tick += (_, _) => UpdateBridgeMeters();
         UpdateBridgeControlLabels();
     }
 
@@ -78,6 +89,7 @@ public partial class MainWindow : Window {
         await RefreshEndpointsAsync();
         UpdateBridgeStatus();
         bridgeStatusTimer.Start();
+        meterTimer.Start();
     }
 
     static string FindRepoRoot() {
@@ -102,6 +114,7 @@ public partial class MainWindow : Window {
             PopulateRouteLegend();
             RebuildPhysicalDestinationChoices();
             RebuildEndpointChoices();
+            RebuildBridgeMeters();
             SpeakerList.SelectedIndex = 0;
             StatusText.Text = "Perfil cargado";
             RedrawMaps();
@@ -462,6 +475,39 @@ public partial class MainWindow : Window {
         string logPath = BridgeLogPath(mode);
         if (!File.Exists(logPath)) return;
         Process.Start(new ProcessStartInfo(logPath) { UseShellExecute = true });
+    }
+
+    void RebuildBridgeMeters() {
+        BridgeMeterPanel.Children.Clear();
+        channelMeters.Clear();
+        if (document is null) return;
+        foreach (SpeakerDefinition speaker in document.Speakers) {
+            ChannelMeterControl meter = new(speaker.Name);
+            channelMeters.Add(speaker.Name, meter);
+            BridgeMeterPanel.Children.Add(meter);
+        }
+    }
+
+    void UpdateBridgeMeters() {
+        if (!meterReader.TryRead(out BridgeMeterSnapshot? snapshot) ||
+            snapshot is null || !snapshot.IsFresh) {
+            ResetBridgeMeters();
+            return;
+        }
+
+        HashSet<string> updated = new(StringComparer.OrdinalIgnoreCase);
+        foreach (BridgeMeterChannel channel in snapshot.Channels) {
+            if (!channelMeters.TryGetValue(channel.Name, out ChannelMeterControl? meter)) continue;
+            meter.SetLevel(channel.Rms, channel.Peak);
+            updated.Add(channel.Name);
+        }
+        foreach ((string name, ChannelMeterControl meter) in channelMeters) {
+            if (!updated.Contains(name)) meter.Reset();
+        }
+    }
+
+    void ResetBridgeMeters() {
+        foreach (ChannelMeterControl meter in channelMeters.Values) meter.Reset();
     }
 
     void PopulateRouteLegend() {

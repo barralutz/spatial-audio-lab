@@ -4,6 +4,7 @@ project(dolby_decoder_probe LANGUAGES CXX)
 
 add_executable(dolby-probe
   src/audio_platform.cpp
+  src/bridge_meter.cpp
   src/capture_commands.cpp
   src/dolby_probe.cpp
   src/dtsx_analysis.cpp

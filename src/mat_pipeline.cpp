@@ -1,6 +1,7 @@
 #include "commands.h"
 
 #include "audio_platform.h"
+#include "bridge_meter.h"
 #include "mat_capture_client.h"
 #include "mat_format.h"
 #include "multi_endpoint_renderer.h"
@@ -950,6 +951,7 @@ void PlayLiveMatLayout(const double seconds,
     const SpeakerLayout layout = LoadSpeakerLayout(layoutPath);
     WinHandle device = OpenMatCaptureDevice();
     ResetMatCapture(device.Get());
+    BridgeMeterPublisher meters(layout, BridgeMeterMode::Mat);
     MultiEndpointRenderer renderer(layout, gain);
     Mat712Decoder decoder(layout);
     Mat712StreamFramer framer;
@@ -998,6 +1000,7 @@ void PlayLiveMatLayout(const double seconds,
                     lastPayloadTime = now;
                     auto pcm = framer.Push(read.payload, read.header.PayloadBytes, decoder);
                     if (!pcm.empty()) {
+                        meters.Update(pcm);
                         queue.Append(std::move(pcm));
                         maximumQueuedFrames = std::max(
                             maximumQueuedFrames, renderer.MinimumFramesAvailable(queue));
