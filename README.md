@@ -92,17 +92,20 @@ puente que quedaria mudo cuando `Formato` y el renderer espacial no coinciden.
 `SpatialAudioDeviceConfiguration`. En la compilacion actual de Windows esa API devuelve
 `AccessDenied` o `NotSupportedOnAudioEndpoint` para este endpoint SysVAD, aunque ambos proveedores
 estan instalados. La ruta de recuperacion conserva los cuatro valores espaciales anteriores,
-configura GUID, mascara y numero de objetos del proveedor solicitado y reenumera unicamente
-`ROOT\MEDIA\0001` con `pnputil`. Al reaparecer, Windows reconstruye tambien el carrier correcto:
-MAT 2.1 Profile 3 para Atmos o DTS:X E1. Si la validacion posterior falla, el script restaura el
-estado anterior y vuelve a reenumerar el dispositivo. No hace falta reiniciar Windows ni manipular
-manualmente `Formato` y `Sonido espacial`.
+configura GUID, mascara, numero de objetos y carrier del proveedor solicitado, y reconstruye
+`AudioEndpointBuilder`/`Audiosrv`. Windows vuelve con MAT 2.1 Profile 3 para Atmos o DTS:X E1 sin
+reiniciar el dispositivo. `pnputil /restart-device ROOT\MEDIA\0001` queda como segunda opcion si
+la reconstruccion de servicios no basta; esto evita acumular reenumeraciones cuando Windows marca
+el dispositivo con un reinicio pendiente. Si la validacion posterior falla, el script restaura el
+estado completo anterior y reconstruye nuevamente la pila. No hace falta reiniciar Windows ni
+manipular manualmente `Formato` y `Sonido espacial`.
 
 Esta ruta usa propiedades privadas de MMDevices observadas en Windows `10.0.26200.8655`; es una
-solucion experimental ligada al endpoint SysVAD de prueba, no una API publica portable. La
-reenumeracion hace desaparecer el dispositivo durante unos segundos. Conviene cambiar el codec
-antes de abrir el juego; una aplicacion que no gestione cambios de dispositivo puede requerir ser
-reiniciada. Si el registro del proveedor Dolby desaparece por completo,
+solucion experimental ligada al endpoint SysVAD de prueba, no una API publica portable. El audio
+se interrumpe durante unos segundos mientras reinician los servicios; la segunda opcion tambien
+hace desaparecer temporalmente el endpoint. Conviene cambiar el codec antes de abrir el juego;
+una aplicacion que no gestione cambios de dispositivo puede requerir ser reiniciada. Si el registro
+del proveedor Dolby desaparece por completo,
 `tools\Repair-DolbySpatialProvider.ps1` sigue disponible para volver a registrar Dolby Access.
 La misma pestaña muestra RMS suavizado y retencion de pico para cada canal logico del perfil. Los
 medidores se toman despues del decoder y antes de la ganancia global, trims y distribucion entre

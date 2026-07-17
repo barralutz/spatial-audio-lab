@@ -219,6 +219,59 @@ function New-SpatialSelection([byte[]]$Current, [Guid]$Format) {
     return $result
 }
 
+function New-SpatialCarrier([byte[]]$Current, [string]$RequestedMode) {
+    if ($Current.Length -ge 48 -and $Current[0] -eq 0x41) {
+        $result = [byte[]]$Current.Clone()
+    } else {
+        $result = [SpatialRegistryAccess]::FromHex(
+            '4100000001000000FEFF080000EE020000E02E001000100016001000' +
+            '3F0600000C030000EA0C1000800000AA00389B71')
+    }
+    [uint32]$carrierSubtype = if ($RequestedMode -eq 'Atmos') { 0x030C } else { 0x010B }
+    Set-Bytes $result 32 ([BitConverter]::GetBytes($carrierSubtype))
+    return $result
+}
+
+function Write-SpatialRegistryState(
+        [string]$RegistrySubKey,
+        [string[]]$ValueNames,
+        [hashtable]$Original,
+        [string]$RequestedMode,
+        [Guid]$Format,
+        [uint32]$StaticMask,
+        [uint32]$DynamicObjects) {
+    [SpatialRegistryAccess]::SetBinary($RegistrySubKey, $ValueNames[0],
+        [byte[]](0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00))
+    [SpatialRegistryAccess]::SetBinary($RegistrySubKey, $ValueNames[1],
+        (New-SpatialActiveConfiguration $Original[$ValueNames[1]] `
+            $Format $StaticMask $DynamicObjects))
+    [SpatialRegistryAccess]::SetBinary($RegistrySubKey, $ValueNames[2],
+        (New-SpatialProviderState $Original[$ValueNames[2]] $Format))
+    [SpatialRegistryAccess]::SetBinary($RegistrySubKey, $ValueNames[3],
+        (New-SpatialSelection $Original[$ValueNames[3]] $Format))
+    [SpatialRegistryAccess]::SetBinary($RegistrySubKey, $ValueNames[4],
+        (New-SpatialCarrier $Original[$ValueNames[4]] $RequestedMode))
+}
+
+function Wait-SpatialEndpoint {
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    do {
+        & $exe set-default $EndpointFilter *> $null
+        if ($LASTEXITCODE -eq 0) { return }
+        Start-Sleep -Milliseconds 500
+    } while ((Get-Date) -lt $deadline)
+    throw "The endpoint '$EndpointFilter' did not return."
+}
+
+function Restart-AudioServices {
+    Write-Host 'Restarting the Windows audio services.'
+    Stop-Service Audiosrv -Force -ErrorAction Stop
+    Stop-Service AudioEndpointBuilder -Force -ErrorAction Stop
+    Start-Service AudioEndpointBuilder -ErrorAction Stop
+    Start-Service Audiosrv -ErrorAction Stop
+    Wait-SpatialEndpoint
+}
+
 function Restart-SpatialDevice {
     $restartOutput = @(& pnputil.exe /restart-device $DeviceInstanceId 2>&1 |
         ForEach-Object { "$_" })
@@ -227,13 +280,7 @@ function Restart-SpatialDevice {
     }
     $restartOutput | ForEach-Object { if ($_ -ne '') { Write-Host $_ } }
 
-    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
-    do {
-        & $exe set-default $EndpointFilter *> $null
-        if ($LASTEXITCODE -eq 0) { return }
-        Start-Sleep -Milliseconds 500
-    } while ((Get-Date) -lt $deadline)
-    throw "The endpoint '$EndpointFilter' did not return after restarting $DeviceInstanceId."
+    Wait-SpatialEndpoint
 }
 
 function Set-SpatialRegistryFallback([string]$RequestedMode) {
@@ -249,7 +296,8 @@ function Set-SpatialRegistryFallback([string]$RequestedMode) {
         '{6737016f-5360-48ee-af05-e616c8ff27a7},2',
         '{fd8a7b27-0b18-4025-ab1c-bdd6b32e1604},2',
         '{908dba32-edff-4c28-8e45-c918561f6748},2',
-        '{8a845654-d6c3-4cd7-b4eb-243d4bd99032},2'
+        '{8a845654-d6c3-4cd7-b4eb-243d4bd99032},2',
+        '{f19f064d-082c-4e27-bc73-6882a1bb8e4c},0'
     )
     $original = @{}
     foreach ($name in $valueNames) {
@@ -261,21 +309,21 @@ function Set-SpatialRegistryFallback([string]$RequestedMode) {
     [uint32]$dynamicObjects = if ($RequestedMode -eq 'Atmos') { 20 } else { 32 }
 
     try {
-        [SpatialRegistryAccess]::SetBinary($registrySubKey, $valueNames[0],
-            [byte[]](0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00))
-        [SpatialRegistryAccess]::SetBinary($registrySubKey, $valueNames[1],
-            (New-SpatialActiveConfiguration $original[$valueNames[1]] `
-                $format $staticMask $dynamicObjects))
-        [SpatialRegistryAccess]::SetBinary($registrySubKey, $valueNames[2],
-            (New-SpatialProviderState $original[$valueNames[2]] $format))
-        [SpatialRegistryAccess]::SetBinary($registrySubKey, $valueNames[3],
-            (New-SpatialSelection $original[$valueNames[3]] $format))
+        Write-SpatialRegistryState $registrySubKey $valueNames $original `
+            $RequestedMode $format $staticMask $dynamicObjects
 
-        Write-Host "Windows rejected the public $RequestedMode switch; reenumerating the virtual endpoint."
-        Restart-SpatialDevice
+        Write-Host "Windows rejected the public $RequestedMode switch; rebuilding the audio services."
+        Restart-AudioServices
         $verified = Wait-SpatialPreflight $RequestedMode
         if (-not $verified.Ready) {
-            throw "$RequestedMode did not become ready.`n$($verified.Output -join "`n")"
+            Write-Warning 'The service restart was insufficient; trying device reenumeration.'
+            Write-SpatialRegistryState $registrySubKey $valueNames $original `
+                $RequestedMode $format $staticMask $dynamicObjects
+            Restart-SpatialDevice
+            $verified = Wait-SpatialPreflight $RequestedMode
+            if (-not $verified.Ready) {
+                throw "$RequestedMode did not become ready.`n$($verified.Output -join "`n")"
+            }
         }
         $verified.Output | Write-Host
     } catch {
@@ -284,7 +332,11 @@ function Set-SpatialRegistryFallback([string]$RequestedMode) {
         foreach ($name in $valueNames) {
             [SpatialRegistryAccess]::SetBinary($registrySubKey, $name, $original[$name])
         }
-        try { Restart-SpatialDevice } catch { Write-Warning "Rollback restart failed: $_" }
+        try {
+            Restart-AudioServices
+        } catch {
+            try { Restart-SpatialDevice } catch { Write-Warning "Rollback restart failed: $_" }
+        }
         throw $failure
     }
 }

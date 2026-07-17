@@ -470,20 +470,20 @@ public partial class MainWindow : Window {
     sealed record ScriptResult(int ExitCode, string Output, string Error);
 
     async Task<ScriptResult> RunPowerShellScriptAsync(string scriptPath, string[] arguments) {
-        bool elevated = IsElevated();
-        ProcessStartInfo start = new("powershell.exe") {
-            UseShellExecute = !elevated,
-            WorkingDirectory = repoRoot,
-            WindowStyle = ProcessWindowStyle.Hidden
-        };
-        if (!elevated) start.Verb = "runas";
-        if (elevated) {
-            start.CreateNoWindow = true;
-            start.RedirectStandardOutput = true;
-            start.RedirectStandardError = true;
-            start.StandardOutputEncoding = Encoding.UTF8;
-            start.StandardErrorEncoding = Encoding.UTF8;
+        if (!IsElevated()) {
+            return await RunElevatedPowerShellScriptAsync(scriptPath, arguments);
         }
+
+        ProcessStartInfo start = new("powershell.exe") {
+            UseShellExecute = false,
+            WorkingDirectory = repoRoot,
+            WindowStyle = ProcessWindowStyle.Hidden,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8
+        };
         start.ArgumentList.Add("-NoProfile");
         start.ArgumentList.Add("-ExecutionPolicy");
         start.ArgumentList.Add("Bypass");
@@ -493,15 +493,72 @@ public partial class MainWindow : Window {
 
         using Process process = Process.Start(start) ??
             throw new InvalidOperationException("No se pudo iniciar PowerShell.");
-        if (!elevated) {
-            await process.WaitForExitAsync();
-            return new ScriptResult(process.ExitCode, "", "");
-        }
         Task<string> outputTask = process.StandardOutput.ReadToEndAsync();
         Task<string> errorTask = process.StandardError.ReadToEndAsync();
         await process.WaitForExitAsync();
         return new ScriptResult(process.ExitCode, await outputTask, await errorTask);
     }
+
+    async Task<ScriptResult> RunElevatedPowerShellScriptAsync(
+            string scriptPath, string[] arguments) {
+        string temporaryBase = IOPath.Combine(
+            IOPath.GetTempPath(), $"dolbyDecoder-{Guid.NewGuid():N}");
+        string wrapperPath = temporaryBase + ".ps1";
+        string outputPath = temporaryBase + ".log";
+        try {
+            StringBuilder command = new("& ");
+            command.Append(PowerShellLiteral(scriptPath));
+            foreach (string argument in arguments) {
+                command.Append(' ');
+                command.Append(IsPowerShellParameter(argument)
+                    ? argument
+                    : PowerShellLiteral(argument));
+            }
+            string wrapper = $$"""
+                $ErrorActionPreference = 'Stop'
+                try {
+                    {{command}} *>&1 | Out-File -LiteralPath {{PowerShellLiteral(outputPath)}} -Encoding utf8
+                    $code = if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE }
+                    exit $code
+                } catch {
+                    $_ | Out-String | Out-File -LiteralPath {{PowerShellLiteral(outputPath)}} -Append -Encoding utf8
+                    exit 1
+                }
+                """;
+            File.WriteAllText(wrapperPath, wrapper, Encoding.Unicode);
+
+            ProcessStartInfo start = new("powershell.exe") {
+                UseShellExecute = true,
+                Verb = "runas",
+                WorkingDirectory = repoRoot,
+                WindowStyle = ProcessWindowStyle.Hidden
+            };
+            start.ArgumentList.Add("-NoProfile");
+            start.ArgumentList.Add("-ExecutionPolicy");
+            start.ArgumentList.Add("Bypass");
+            start.ArgumentList.Add("-File");
+            start.ArgumentList.Add(wrapperPath);
+
+            using Process process = Process.Start(start) ??
+                throw new InvalidOperationException("No se pudo iniciar PowerShell como administrador.");
+            await process.WaitForExitAsync();
+            string output = File.Exists(outputPath)
+                ? await File.ReadAllTextAsync(outputPath)
+                : "";
+            return new ScriptResult(process.ExitCode, output, "");
+        } finally {
+            try { File.Delete(wrapperPath); } catch (IOException) { }
+            try { File.Delete(outputPath); } catch (IOException) { }
+        }
+    }
+
+    static bool IsPowerShellParameter(string value) =>
+        value.Length > 1 && value[0] == '-' &&
+        value[1..].All(character => char.IsLetterOrDigit(character) ||
+                                     character is '-' or '_');
+
+    static string PowerShellLiteral(string value) =>
+        $"'{value.Replace("'", "''", StringComparison.Ordinal)}'";
 
     static bool IsElevated() {
         using WindowsIdentity identity = WindowsIdentity.GetCurrent();
