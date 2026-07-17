@@ -20,6 +20,10 @@ public sealed record EndpointChoice(string Filter, string DisplayName);
 
 sealed record AudioEndpointInfo(string Name, string Id);
 
+sealed record PhysicalDestinationChoice(OutputRouteDefinition Output,
+                                        int ChannelIndex,
+                                        string DisplayName);
+
 public partial class MainWindow : Window {
     static readonly Color[] RouteColors = [
         Color.FromRgb(52, 120, 165),
@@ -37,6 +41,7 @@ public partial class MainWindow : Window {
 
     readonly string repoRoot;
     readonly List<AudioEndpointInfo> activeEndpoints = [];
+    readonly ObservableCollection<PhysicalDestinationChoice> physicalDestinationChoices = [];
     readonly DispatcherTimer matStatusTimer = new() {
         Interval = TimeSpan.FromSeconds(1)
     };
@@ -55,6 +60,7 @@ public partial class MainWindow : Window {
 
     public MainWindow() {
         InitializeComponent();
+        PhysicalDestinationCombo.ItemsSource = physicalDestinationChoices;
         repoRoot = FindRepoRoot();
         Loaded += WindowLoaded;
         Closed += (_, _) => matStatusTimer.Stop();
@@ -85,11 +91,11 @@ public partial class MainWindow : Window {
             document = LayoutDocument.Load(path);
             currentPath = IOPath.GetFullPath(path);
             SpeakerList.ItemsSource = document.Speakers;
-            OutputCombo.ItemsSource = document.Outputs;
             OutputGrid.ItemsSource = document.Outputs;
             LayoutNameText.Text = document.Name;
             PathText.Text = currentPath;
             PopulateRouteLegend();
+            RebuildPhysicalDestinationChoices();
             RebuildEndpointChoices();
             SpeakerList.SelectedIndex = 0;
             StatusText.Text = "Perfil cargado";
@@ -192,7 +198,23 @@ public partial class MainWindow : Window {
             comboBox.SelectedValue is not string filter) return;
         if (output.Endpoint.Equals(filter, StringComparison.OrdinalIgnoreCase)) return;
         output.Endpoint = filter;
+        if (selectedSpeaker is not null &&
+            ReferenceEquals(document?.OutputFor(selectedSpeaker.Name), output)) {
+            DestinationEndpointText.Text = output.Endpoint;
+        }
         StatusText.Text = $"Endpoint actualizado: {output.Name}";
+    }
+
+    void RebuildPhysicalDestinationChoices() {
+        physicalDestinationChoices.Clear();
+        if (document is null) return;
+        foreach (OutputRouteDefinition output in document.Outputs) {
+            for (int index = 0; index < output.Speakers.Count; ++index) {
+                physicalDestinationChoices.Add(new PhysicalDestinationChoice(
+                    output, index,
+                    $"{output.Name} / {output.PhysicalChannelName(index)} (canal {index + 1})"));
+            }
+        }
     }
 
     bool EndpointMatchesExactlyOne(string filter, AudioEndpointInfo candidate) {
@@ -429,15 +451,23 @@ public partial class MainWindow : Window {
         AzimuthSlider.IsEnabled = enabled;
         ElevationSlider.IsEnabled = enabled;
         TrimSlider.IsEnabled = enabled;
-        OutputCombo.IsEnabled = enabled;
+        PhysicalDestinationCombo.IsEnabled = enabled;
         if (enabled) {
             SelectedNameText.Text = selectedSpeaker!.Name;
             AzimuthSlider.Value = selectedSpeaker.Azimuth;
             ElevationSlider.Value = selectedSpeaker.Elevation;
             TrimSlider.Value = selectedSpeaker.TrimDb;
-            OutputCombo.SelectedItem = document!.OutputFor(selectedSpeaker.Name);
+            var slot = document!.SlotFor(selectedSpeaker.Name);
+            PhysicalDestinationCombo.SelectedItem = slot.HasValue
+                ? physicalDestinationChoices.FirstOrDefault(choice =>
+                    ReferenceEquals(choice.Output, slot.Value.Output) &&
+                    choice.ChannelIndex == slot.Value.ChannelIndex)
+                : null;
+            DestinationEndpointText.Text = slot?.Output.Endpoint ?? "Sin destino";
         } else {
             SelectedNameText.Text = "";
+            PhysicalDestinationCombo.SelectedItem = null;
+            DestinationEndpointText.Text = "";
         }
         UpdateValueLabels();
         updatingControls = false;
@@ -458,18 +488,26 @@ public partial class MainWindow : Window {
         TrimValue.Text = $"{TrimSlider.Value:0.0} dB";
     }
 
-    void OutputSelectionChanged(object sender, SelectionChangedEventArgs e) {
+    void PhysicalDestinationSelectionChanged(object sender, SelectionChangedEventArgs e) {
         if (updatingControls || document is null || selectedSpeaker is null ||
-            OutputCombo.SelectedItem is not OutputRouteDefinition target) return;
-        OutputRouteDefinition? current = document.OutputFor(selectedSpeaker.Name);
-        if (ReferenceEquals(current, target)) return;
-        current?.Speakers.RemoveAll(name => name.Equals(
-            selectedSpeaker.Name, StringComparison.OrdinalIgnoreCase));
-        current?.NotifySpeakersChanged();
-        target.Speakers.Add(selectedSpeaker.Name);
-        target.NotifySpeakersChanged();
+            PhysicalDestinationCombo.SelectedItem is not PhysicalDestinationChoice target) return;
+        var source = document.SlotFor(selectedSpeaker.Name);
+        if (!source.HasValue ||
+            (ReferenceEquals(source.Value.Output, target.Output) &&
+             source.Value.ChannelIndex == target.ChannelIndex)) return;
+
+        string previousDestination =
+            $"{source.Value.Output.Name} / " +
+            $"{source.Value.Output.PhysicalChannelName(source.Value.ChannelIndex)}";
+        string displaced = document.AssignSpeakerToSlot(
+            selectedSpeaker.Name, target.Output, target.ChannelIndex);
         OutputGrid.Items.Refresh();
+        UpdateSpeakerControls();
         RedrawMaps();
+        StatusText.Text =
+            $"{selectedSpeaker.Name} -> {target.Output.Name} / " +
+            $"{target.Output.PhysicalChannelName(target.ChannelIndex)}; " +
+            $"{displaced} -> {previousDestination} (sin guardar)";
     }
 
     void ResetPositionsClick(object sender, RoutedEventArgs e) {

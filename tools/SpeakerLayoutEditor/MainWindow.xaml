@@ -150,9 +150,13 @@
                 </Grid>
                 <Slider x:Name="TrimSlider" Minimum="-24" Maximum="12"
                         ValueChanged="SpeakerControlChanged" />
-                <TextBlock Text="Salida" Margin="0,4,0,6" />
-                <ComboBox x:Name="OutputCombo" DisplayMemberPath="Name"
-                          SelectionChanged="OutputSelectionChanged" Height="30" />
+                <TextBlock Text="Destino fisico" Margin="0,4,0,6" />
+                <ComboBox x:Name="PhysicalDestinationCombo" DisplayMemberPath="DisplayName"
+                          SelectionChanged="PhysicalDestinationSelectionChanged" Height="30"
+                          ToolTip="Endpoint y canal fisico que reproducen este parlante" />
+                <TextBlock x:Name="DestinationEndpointText" Margin="2,5,2,0"
+                           Foreground="#596168" TextWrapping="Wrap"
+                           ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
                 <Button Height="36" Margin="0,14,0,0" Click="ResetPositionsClick"
                         ToolTip="Restablece el azimut y la elevacion de todos los parlantes">
                   <StackPanel Orientation="Horizontal">
@@ -213,10 +217,10 @@
                   </DataGridTemplateColumn>
                   <DataGridTextColumn Header="ms" Binding="{Binding DelayMilliseconds}"
                                       Width="48" />
-                  <DataGridTemplateColumn Header="Canales" Width="118" IsReadOnly="True">
+                  <DataGridTemplateColumn Header="Mapeo" Width="118" IsReadOnly="True">
                     <DataGridTemplateColumn.CellTemplate>
                       <DataTemplate>
-                        <TextBlock Text="{Binding SpeakersText}" ToolTip="{Binding SpeakersText}"
+                        <TextBlock Text="{Binding ChannelMapText}" ToolTip="{Binding ChannelMapText}"
                                    TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
                       </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>

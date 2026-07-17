@@ -28,6 +28,17 @@ internal sealed class SpeakerDefinition : INotifyPropertyChanged {
 }
 
 internal sealed class OutputRouteDefinition : INotifyPropertyChanged {
+    static readonly IReadOnlyDictionary<int, string[]> StandardChannelNames =
+        new Dictionary<int, string[]> {
+            [1] = ["MONO"],
+            [2] = ["FL", "FR"],
+            [6] = ["FL", "FR", "FC", "LFE", "SL", "SR"],
+            [8] = ["FL", "FR", "FC", "LFE", "BL", "BR", "SL", "SR"],
+            [10] = ["FL", "FR", "FC", "LFE", "BL", "BR", "SL", "SR", "TFL", "TFR"],
+            [12] = ["FL", "FR", "FC", "LFE", "BL", "BR", "SL", "SR",
+                    "TFL", "TFR", "TBL", "TBR"]
+        };
+
     string name = "";
     string endpoint = "";
     double delayMilliseconds;
@@ -40,11 +51,22 @@ internal sealed class OutputRouteDefinition : INotifyPropertyChanged {
     }
     public List<string> Speakers { get; } = new();
     public string SpeakersText => string.Join(", ", Speakers);
+    public string ChannelMapText => string.Join(", ", Speakers.Select(
+        (speaker, index) => $"{PhysicalChannelName(index)}<-{speaker}"));
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
-    public void NotifySpeakersChanged() =>
+    public string PhysicalChannelName(int index) {
+        if (index < 0 || index >= Speakers.Count) throw new ArgumentOutOfRangeException(nameof(index));
+        return StandardChannelNames.TryGetValue(Speakers.Count, out string[]? names)
+            ? names[index]
+            : $"CH{index + 1}";
+    }
+
+    public void NotifySpeakersChanged() {
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpeakersText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ChannelMapText)));
+    }
 
     void Set<T>(ref T field, T value, [CallerMemberName] string? property = null) {
         if (EqualityComparer<T>.Default.Equals(field, value)) return;
@@ -125,6 +147,36 @@ internal sealed class LayoutDocument {
     public OutputRouteDefinition? OutputFor(string speakerName) =>
         Outputs.FirstOrDefault(output => output.Speakers.Contains(
             speakerName, StringComparer.OrdinalIgnoreCase));
+
+    public (OutputRouteDefinition Output, int ChannelIndex)? SlotFor(string speakerName) {
+        foreach (OutputRouteDefinition output in Outputs) {
+            int index = output.Speakers.FindIndex(name => name.Equals(
+                speakerName, StringComparison.OrdinalIgnoreCase));
+            if (index >= 0) return (output, index);
+        }
+        return null;
+    }
+
+    public string AssignSpeakerToSlot(string speakerName,
+                                      OutputRouteDefinition target,
+                                      int targetChannelIndex) {
+        var source = SlotFor(speakerName) ??
+            throw new InvalidDataException($"El parlante {speakerName} no tiene una salida.");
+        if (targetChannelIndex < 0 || targetChannelIndex >= target.Speakers.Count) {
+            throw new ArgumentOutOfRangeException(nameof(targetChannelIndex));
+        }
+
+        string displacedSpeaker = target.Speakers[targetChannelIndex];
+        if (ReferenceEquals(source.Output, target) && source.ChannelIndex == targetChannelIndex) {
+            return displacedSpeaker;
+        }
+
+        source.Output.Speakers[source.ChannelIndex] = displacedSpeaker;
+        target.Speakers[targetChannelIndex] = speakerName;
+        source.Output.NotifySpeakersChanged();
+        if (!ReferenceEquals(source.Output, target)) target.NotifySpeakersChanged();
+        return displacedSpeaker;
+    }
 
     static string Read(string path, string section, string key) {
         StringBuilder value = new(BufferCharacters);

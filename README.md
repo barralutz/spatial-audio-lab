@@ -63,11 +63,18 @@ detras tambien produjo senal en ambos canales superiores traseros. La salida 7.1
 conserva exactamente el SHA-256 de referencia.
 
 El editor WPF permite arrastrar cada parlante en vistas de planta y elevacion, modificar azimut,
-elevacion, nivel y ruta, editar endpoints/retardos y probar un parlante aislado. Guarda directamente
-el mismo INI consumido por el motor. La pestaña `Salidas` enumera los endpoints de reproduccion
-activos en un selector, permite actualizar la lista despues de conectar hardware y conserva los
-filtros de dispositivos desconectados marcandolos como no disponibles. `Restablecer posiciones`
-devuelve azimut y elevacion al esquema 7.1.4 estandar sin cambiar niveles, endpoints ni retardos.
+elevacion, nivel y destino fisico, editar endpoints/retardos y probar un parlante aislado. El selector
+de destino identifica cada slot PCM como `ruta / canal` y cambia las asignaciones mediante un
+intercambio: por ejemplo, `TFL -> rear / BL` envia el objeto superior frontal izquierdo al quinto
+canal del endpoint Realtek y mueve el `BL` que ocupaba ese slot al destino anterior de `TFL`. No
+requiere reasignar conectores en el controlador Realtek. El orden resultante se guarda en
+`speakers=` y es el orden de canales que consume el renderer.
+
+Guarda directamente el mismo INI consumido por el motor. La pestaña `Salidas` enumera los endpoints
+de reproduccion activos en un selector, permite actualizar la lista despues de conectar hardware y
+conserva los filtros de dispositivos desconectados marcandolos como no disponibles. `Restablecer
+posiciones` devuelve azimut y elevacion al esquema 7.1.4 estandar sin cambiar niveles, endpoints ni
+retardos.
 La pestaña `MAT` inicia y detiene `live-layout`, controla ganancia, prebuffer y duracion, muestra el
 PID activo y abre el registro. El puente se ejecuta como proceso independiente y continua activo al
 cerrar el editor; si hace falta elevacion, Windows solicita UAC al ejecutar el script correspondiente.
