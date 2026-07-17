@@ -37,7 +37,7 @@ internal sealed class MpvController : IAsyncDisposable {
         string startText = startSeconds.ToString("F6", System.Globalization.CultureInfo.InvariantCulture);
         List<string> arguments = new() {
             "--no-audio", "--pause=yes", "--keep-open=no",
-            "--hwdec=auto-safe", "--title=DolbyPlayer Atmos 7.1.2",
+            "--hwdec=auto-safe", "--title=DolbyPlayer Atmos 7.1.4",
             $"--start={startText}", $"--input-ipc-server=\\\\.\\pipe\\{pipeName}", input
         };
         arguments.Insert(2, headless ? "--vo=null" : "--force-window=yes");

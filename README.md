@@ -2,8 +2,9 @@
 
 Este repositorio investiga la captura y el renderizado de Dolby Atmos para obtener una salida
 analogica configurable. La ruta de juegos ya reproduce Dolby MAT como 7.1.4 mediante tres
-dispositivos WASAPI; la ruta de peliculas E-AC-3 JOC y TrueHD Atmos conserva por ahora la salida
-7.1.2. El endpoint virtual SysVAD recibe Dolby MAT 2.1 antes de HDMI. Tambien existe un tercer modo
+dispositivos WASAPI; la ruta de peliculas E-AC-3 JOC y TrueHD Atmos renderiza tambien PCM 7.1.4
+sobre el mismo layout fisico. El endpoint virtual SysVAD recibe Dolby MAT 2.1 antes de HDMI.
+Tambien existe un tercer modo
 experimental que transporta una cama PCM 7.1.4 sin codificador Dolby o DTS.
 
 ## Conclusion tecnica
@@ -165,9 +166,9 @@ equivale a 22 ms reales aunque el control solicite 20 ms.
 .\tools\Stop-LivePcm714.ps1
 ```
 
-`live-layout` es actualmente la ruta configurable para MAT de juegos. `DolbyPlayer` todavia
-renderiza peliculas a la pareja Realtek 8+2; compartir el mismo renderer 7.1.4 es la siguiente
-integracion, no una capacidad que deba asumirse ya terminada.
+`live-layout` es la ruta configurable para MAT de juegos. `DolbyPlayer` renderiza peliculas Atmos
+a doce canales y los entrega a `SinkDescription Sample`; `live-pcm-layout` reutiliza despues el
+mismo perfil, correccion de deriva, trims y medidores de los juegos.
 
 ### Renderer propio PCM 7.1.4
 
@@ -526,8 +527,10 @@ Capturas de referencia:
 - `tools/Prepare-TrueHdAtmos712.ps1`: extrae un fragmento TrueHD Atmos, convierte la presentacion
   de objetos a DAMF y la renderiza como WAV PCM16 7.1.2.
 - `tools/Build-DolbyPlayer.ps1`: compila el reproductor de peliculas y valida sus dependencias.
-- `tools/Start-DolbyPlayer.ps1`: inicia una pelicula Atmos con video, subtitulos y salida analogica
-  Realtek 8+2.
+- `tools/Start-DolbyPlayer.ps1`: inicia una pelicula Atmos con video, subtitulos y salida PCM 7.1.4.
+- `tools/Launch-DolbyPlayer.ps1`: selector grafico de pelicula, elevacion y preparacion automatica
+  del puente PCM.
+- `tools/Install-DolbyPlayerShortcut.ps1`: crea el acceso directo del reproductor en el escritorio.
 - `tools/DolbyPlayer`: reproductor incremental E-AC-3 JOC/TrueHD Atmos, frontend mpv y reloj WASAPI.
 - `third_party/truehdd-src/src/bin/truehd-stream.rs`: decoder TrueHD presentation 3 incremental con
   protocolo binario THDS documentado en `STREAMING_PROTOCOL.md`.
@@ -686,10 +689,9 @@ float/48 kHz del endpoint Realtek, con frames no silenciosos y cabecera WAV vali
 El ring, el parser incremental y la salida analogica directa ya estan validados sin perdida. Las
 siguientes iteraciones se concentran en fidelidad e integracion:
 
-1. Reutilizar el renderer configurable en `DolbyPlayer` para peliculas 7.1.4.
-2. Agregar una espera/notificacion cancelable al IOCTL despues de validar el sondeo inicial.
-3. Medir latencia y recuperacion ante desconexion/reconexion fisica de DACs secundarios.
-4. Comparar el paneo y el LFE contra un decoder de referencia; despues sustituir la repeticion LFE
+1. Agregar una espera/notificacion cancelable al IOCTL despues de validar el sondeo inicial.
+2. Medir latencia y recuperacion ante desconexion/reconexion fisica de DACs secundarios.
+3. Comparar el paneo y el LFE contra un decoder de referencia; despues sustituir la repeticion LFE
    por un resampler con filtro.
 
 El driver solo debe transportar bytes: la decodificacion, metadata y mezcla permanecen en user mode
@@ -724,7 +726,7 @@ techo tuvieron señal (`TFL` pico -24.1 dBFS, `TFR` pico -21.9 dBFS). Las salida
 frontal completaron la reproduccion con relojes iguales y delta de 0 ms.
 
 La ruta incremental ya esta integrada en `DolbyPlayer`: Matroska entrega la pista elegida a
-`EnhancedAC3Renderer`, Cavern actualiza JOC/OAMD cada 64 muestras y el PCM 7.1.2 alimenta una cola
+`EnhancedAC3Renderer`, Cavern actualiza JOC/OAMD cada 64 muestras y el PCM 7.1.4 alimenta una cola
 acotada. Pausa y busqueda reconstruyen todo el estado interframe con 300 ms de preroll. La utilidad
 y Cavern quedan sujetas a la licencia no comercial/share-alike incluida en `third_party/Cavern`.
 
@@ -760,15 +762,22 @@ El script anterior se conserva como referencia offline. La reproduccion normal y
 temporales DAMF: el fork de `truehdd` incluye `truehd-stream`, que recibe bloques TrueHD desde
 Matroska y emite PCM de objetos mas eventos OAMD en el protocolo THDS v1. El lector conserva el PTS
 del major sync anterior a una busqueda, aplica el preroll exacto y renderiza cada actualizacion a
-7.1.2 con Cavern.
+7.1.4 con Cavern. El script offline anterior se conserva como referencia 7.1.2 historica.
 
 ### Reproductor de peliculas Atmos en tiempo real
 
 `DolbyPlayer` reproduce MKV E-AC-3 JOC y TrueHD Atmos. mpv conserva video, HDR, subtitulos,
 fullscreen y controles de pausa/busqueda, pero se inicia sin audio. El motor propio selecciona la
-pista Atmos, renderiza `FL FR FC LFE BL BR SL SR TFL TFR` y envia los primeros ocho canales al
-Realtek trasero y los dos superiores a la salida frontal. No requiere Dolby Access, el endpoint
-SysVAD, F7 ni `live-712`; esos componentes solo se usan para Atmos de juegos.
+pista Atmos y renderiza `FL FR FC LFE BL BR SL SR TFL TFR TBL TBR`. Esos doce canales se escriben
+en `SinkDescription Sample`; el puente PCM los distribuye con `configs/realtek-c1u-714.ini`. Esto
+reutiliza los tres DACs, trims, retardos, medidores y correccion de deriva ya validados. No usa
+Dolby Access, MAT ni DTS:X para decodificar la pelicula, pero si requiere el driver SysVAD iniciado
+con F7 y `live-pcm-layout` activo.
+
+El escritorio contiene `DolbyPlayer Atmos 7.1.4.lnk`. Un doble clic abre el selector de pelicula;
+tambien se puede arrastrar un MKV sobre el acceso directo. Si el puente PCM no esta activo, el
+lanzador solicita UAC, cambia el endpoint a PCM 7.1.4 y lo inicia con ganancia 0.15, prebuffer de
+40 ms y duracion indefinida. Si ya esta activo, abre la pelicula sin reiniciar audio.
 
 Dependencias instaladas en este equipo: .NET 8, WSL con FFprobe y mpv 0.41. El decoder
 `tools/truehdd/truehd-stream.exe` esta incluido junto con su fuente Apache-2.0. Para compilar y
@@ -777,32 +786,34 @@ reproducir:
 ```powershell
 cd C:\Users\barra\Documents\Desarrollo\dolbyDecoder
 .\tools\Build-DolbyPlayer.ps1
+.\tools\Install-DolbyPlayerShortcut.ps1
 
 .\tools\Start-DolbyPlayer.ps1 `
-  -InputFile 'C:\Users\barra\Desktop\28 years\28 Years Later The Bone Temple 2026.mkv' `
-  -StartSeconds 600 -Gain 0.25
+  -InputFile 'D:\Torrent\28 Years Later The Bone Temple 2026 UHD BluRay HDR10p DV HEVC TrueHD Atmos 7.1 x265-E\28 Years Later The Bone Temple 2026.mkv' `
+  -StartSeconds 600 -Gain 1
 ```
 
 El primer stream Atmos se selecciona automaticamente. `-AudioStreamIndex N` fuerza el indice
 global `0:N`; `-AvDelayMilliseconds N` adelanta el timeline de video cuando es necesario compensar
-la latencia de pantalla. Los filtros de endpoint tambien son configurables con `-RearEndpoint` y
-`-HeightEndpoint`.
+la latencia de pantalla. `-SinkEndpoint` permite cambiar el endpoint PCM virtual.
 
 La validacion realizada con *Bone Temple* y *Guardians of the Galaxy Vol. 3* cubre:
 
-- E-AC-3 JOC: 5.06 s decodificados en 0.96 s; prueba analogica de 10.028 s, cero starvation.
-- TrueHD Atmos: 5.10 s decodificados en 1.67 s; el render directo coincide con el DAMF de referencia
-  por canal, incluidos picos `TFL -35.64 dBFS` y `TFR -37.52 dBFS`.
+- E-AC-3 JOC: *Guardians 3* genero senal en `TFL/TFR/TBL/TBR`, con picos entre -28.03 y
+  -33.45 dBFS.
+- TrueHD Atmos: *Bone Temple* genero senal en los cuatro canales superiores, con picos entre
+  -37.36 y -42.38 dBFS.
 - Video/subtitulos: IPC mpv, pausa, busqueda exacta y seleccion de las 68 pistas del MKV.
 - Integracion: E-AC-3 y TrueHD pasaron pausa, salto, reconstruccion y reanudacion sin starvation;
   TrueHD salto de aproximadamente 602 s a 607.023 s.
-- Sincronizacion: drift A/V maximo de 41.7 ms en reproduccion continua y 90.1 ms durante la prueba
-  de pausa/busqueda; cero correcciones duras. Los relojes Realtek terminaron a menos de 0.8 ms.
+- Salida completa: seis segundos de E-AC-3 JOC pasaron por el endpoint PCM y los tres DACs con cero
+  starvation, deriva A/V maxima de 71.4 ms y cero correcciones duras.
 
-La correccion A/V usa el menor de los dos relojes WASAPI como maestro. Desajustes pequenos ajustan
-la velocidad de video entre 0.995x y 1.005x; un desajuste superior a 250 ms busca el video sin mover
-el audio. Al buscar manualmente se pausa la salida, se reconstruye el decoder desde un major sync o
-frame anterior, se precargan 2.5 s y se reanuda.
+La correccion A/V usa el reloj WASAPI de `SinkDescription Sample`; la alineacion de los tres DACs
+fisicos queda a cargo de `MultiEndpointRenderer`. Desajustes A/V pequenos ajustan la velocidad de
+video entre 0.995x y 1.005x; uno superior a 250 ms busca el video sin mover el audio. Al buscar
+manualmente se pausa la salida, se reconstruye el decoder desde un major sync o frame anterior, se
+precargan 2.5 s y se reanuda.
 
 ## Referencias
 

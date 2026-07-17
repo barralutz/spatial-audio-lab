@@ -2,13 +2,13 @@ using System.Diagnostics;
 
 namespace DolbyPlayer;
 
-internal sealed class Pcm712Buffer {
+internal sealed class Pcm714Buffer {
     public const int SampleRate = 48_000;
-    public const int Channels = 10;
+    public const int Channels = 12;
 
     readonly object gate = new();
     readonly List<float> samples = new();
-    readonly long[] cursors = new long[2];
+    readonly long[] cursors = new long[1];
     long baseFrame;
     double mediaStartSeconds;
     long starvationFrames;
@@ -17,7 +17,7 @@ internal sealed class Pcm712Buffer {
     public double MediaPositionSeconds {
         get {
             lock (gate) {
-                return mediaStartSeconds + Math.Min(cursors[0], cursors[1]) / (double)SampleRate;
+                return mediaStartSeconds + cursors[0] / (double)SampleRate;
             }
         }
     }
@@ -25,7 +25,7 @@ internal sealed class Pcm712Buffer {
     public long BufferedFrames {
         get {
             lock (gate) {
-                return EndFrameLocked() - Math.Max(cursors[0], cursors[1]);
+                return EndFrameLocked() - cursors[0];
             }
         }
     }
@@ -36,7 +36,7 @@ internal sealed class Pcm712Buffer {
 
     public float[] SnapshotBuffered() {
         lock (gate) {
-            long firstFrame = Math.Max(cursors[0], cursors[1]);
+            long firstFrame = cursors[0];
             int firstSample = checked((int)((firstFrame - baseFrame) * Channels));
             int count = samples.Count - firstSample;
             float[] result = new float[count];
@@ -50,7 +50,6 @@ internal sealed class Pcm712Buffer {
             samples.Clear();
             baseFrame = 0;
             cursors[0] = 0;
-            cursors[1] = 0;
             mediaStartSeconds = startSeconds;
             starvationFrames = 0;
             completed = false;
@@ -63,7 +62,7 @@ internal sealed class Pcm712Buffer {
 
     public void Append(float[] interleaved) {
         if (interleaved.Length % Channels != 0) {
-            throw new ArgumentException("PCM 7.1.2 must contain complete 10-channel frames.", nameof(interleaved));
+            throw new ArgumentException("PCM 7.1.4 must contain complete 12-channel frames.", nameof(interleaved));
         }
         lock (gate) {
             samples.AddRange(interleaved);
@@ -119,7 +118,7 @@ internal sealed class Pcm712Buffer {
     long EndFrameLocked() => baseFrame + samples.Count / Channels;
 
     void DiscardConsumedLocked() {
-        long consumed = Math.Min(cursors[0], cursors[1]) - baseFrame;
+        long consumed = cursors[0] - baseFrame;
         if (consumed < 4_800 && consumed != samples.Count / Channels) return;
         int discardSamples = checked((int)(consumed * Channels));
         samples.RemoveRange(0, discardSamples);

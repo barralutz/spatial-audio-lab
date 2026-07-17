@@ -8,7 +8,7 @@ namespace DolbyPlayer;
 
 internal sealed class TrueHdObjectRenderer : IDisposable {
     const int UpdateRate = 64;
-    readonly Pcm712Buffer output;
+    readonly Pcm714Buffer output;
     readonly long maximumOutputFrames;
     readonly List<float> pendingPcm = new();
     readonly List<TrueHdMetadataEvent>[] metadata;
@@ -26,9 +26,9 @@ internal sealed class TrueHdObjectRenderer : IDisposable {
 
     public long EmittedFrames => emittedFrames;
 
-    public TrueHdObjectRenderer(TrueHdStreamConfig config, Pcm712Buffer output,
+    public TrueHdObjectRenderer(TrueHdStreamConfig config, Pcm714Buffer output,
                                 long discardFrames, long maximumOutputFrames) {
-        if (config.SampleRate != Pcm712Buffer.SampleRate) {
+        if (config.SampleRate != Pcm714Buffer.SampleRate) {
             throw new NotSupportedException($"Only 48 kHz TrueHD is supported, got {config.SampleRate} Hz.");
         }
         this.config = config;
@@ -40,7 +40,7 @@ internal sealed class TrueHdObjectRenderer : IDisposable {
         stableState = Enumerable.Range(0, config.ChannelCount).Select(_ => ObjectState.Default).ToArray();
         nextPlanar = CreatePlanar(config.ChannelCount, UpdateRate);
 
-        Listener.ReplaceChannels(ChannelPrototype.ToLayout(ChannelPrototype.ref712));
+        Listener.ReplaceChannels(ChannelPrototype.ToLayout(ChannelPrototype.ref714));
         master = new StreamMaster(_ => nextPlanar);
         sources = Enumerable.Range(0, config.ChannelCount)
             .Select(index => (Source)new StreamMasterSource(master, index) {
@@ -48,9 +48,9 @@ internal sealed class TrueHdObjectRenderer : IDisposable {
                 VolumeRolloff = Rolloffs.Disabled,
                 SpatialBlend = 1,
             }).ToList();
-        master.SetupSources(sources, Pcm712Buffer.SampleRate);
+        master.SetupSources(sources, Pcm714Buffer.SampleRate);
         listener = new Listener(false) {
-            SampleRate = Pcm712Buffer.SampleRate,
+            SampleRate = Pcm714Buffer.SampleRate,
             UpdateRate = UpdateRate,
             AudioQuality = QualityModes.Perfect,
             Volume = .707f,
@@ -125,8 +125,8 @@ internal sealed class TrueHdObjectRenderer : IDisposable {
             int outputFrames = checked((int)Math.Min(consumed - firstFrame,
                 maximumOutputFrames - emittedFrames));
             if (outputFrames > 0) {
-                float[] copy = new float[outputFrames * Pcm712Buffer.Channels];
-                Array.Copy(rendered, firstFrame * Pcm712Buffer.Channels, copy, 0, copy.Length);
+                float[] copy = new float[outputFrames * Pcm714Buffer.Channels];
+                Array.Copy(rendered, firstFrame * Pcm714Buffer.Channels, copy, 0, copy.Length);
                 output.Append(copy);
                 emittedFrames += outputFrames;
             }

@@ -8,13 +8,13 @@ using Cavern.Utilities;
 namespace DolbyPlayer;
 
 internal static class AtmosChunkRenderer {
-    const int OutputChannels = 10;
+    const int OutputChannels = Pcm714Buffer.Channels;
     const int UpdateRate = 64;
     static int channelsInitialized;
 
     public static float[] Render(string input, double maximumSeconds = double.PositiveInfinity) {
         if (Interlocked.Exchange(ref channelsInitialized, 1) == 0) {
-            Listener.ReplaceChannels(ChannelPrototype.ToLayout(ChannelPrototype.ref712));
+            Listener.ReplaceChannels(ChannelPrototype.ToLayout(ChannelPrototype.ref714));
         }
 
         using AudioReader reader = AudioReader.Open(input);
@@ -22,7 +22,7 @@ internal static class AtmosChunkRenderer {
         if (reader is AudioTrackReader trackReader && trackReader.track.Format == Codec.TrueHD) {
             throw new NotSupportedException("TrueHD must be converted to presentation 3 DAMF first.");
         }
-        if (reader.SampleRate != Pcm712Buffer.SampleRate) {
+        if (reader.SampleRate != Pcm714Buffer.SampleRate) {
             throw new NotSupportedException($"Only 48 kHz Atmos is supported, got {reader.SampleRate} Hz.");
         }
 

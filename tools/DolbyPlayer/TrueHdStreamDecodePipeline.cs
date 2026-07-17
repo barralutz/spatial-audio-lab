@@ -11,7 +11,7 @@ internal sealed class TrueHdStreamDecodePipeline : IAtmosDecodePipeline {
     readonly string input;
     readonly AudioStreamInfo stream;
     readonly double mediaDuration;
-    readonly Pcm712Buffer output;
+    readonly Pcm714Buffer output;
     CancellationTokenSource? producerCancellation;
     Task? producer;
     Exception? failure;
@@ -20,7 +20,7 @@ internal sealed class TrueHdStreamDecodePipeline : IAtmosDecodePipeline {
     public bool IsCompleted => producer?.IsCompleted == true;
 
     public TrueHdStreamDecodePipeline(PlayerPaths paths, string input, AudioStreamInfo stream,
-                                      double mediaDuration, Pcm712Buffer output) {
+                                      double mediaDuration, Pcm714Buffer output) {
         this.paths = paths;
         this.input = input;
         this.stream = stream;
@@ -38,7 +38,7 @@ internal sealed class TrueHdStreamDecodePipeline : IAtmosDecodePipeline {
 
     public async Task WaitForPrebufferAsync(double seconds, CancellationToken cancellationToken) {
         long frames = (long)(Math.Min(seconds, Math.Max(0, mediaDuration - output.MediaPositionSeconds)) *
-            Pcm712Buffer.SampleRate);
+            Pcm714Buffer.SampleRate);
         while (output.BufferedFrames < frames) {
             if (failure != null) throw new InvalidOperationException("TrueHD Atmos decoder failed.", failure);
             if (producer?.IsCompleted == true) break;
@@ -69,9 +69,9 @@ internal sealed class TrueHdStreamDecodePipeline : IAtmosDecodePipeline {
                 throw new InvalidDataException(
                     $"Could not find a TrueHD major sync before {requestedStart:F3} s (found {decodedStart:F3} s)." );
             }
-            long discardFrames = (long)Math.Round((requestedStart - decodedStart) * Pcm712Buffer.SampleRate);
+            long discardFrames = (long)Math.Round((requestedStart - decodedStart) * Pcm714Buffer.SampleRate);
             long maximumFrames = (long)Math.Ceiling(
-                Math.Max(0, mediaDuration - requestedStart) * Pcm712Buffer.SampleRate);
+                Math.Max(0, mediaDuration - requestedStart) * Pcm714Buffer.SampleRate);
 
             decoder = StartDecoder();
             using CancellationTokenRegistration registration = cancellationToken.Register(() => {
@@ -84,7 +84,7 @@ internal sealed class TrueHdStreamDecodePipeline : IAtmosDecodePipeline {
             await protocol.ReadHeaderAsync(cancellationToken);
             bool eos = false;
             while (!eos) {
-                while (output.BufferedFrames > MaximumBufferedSeconds * Pcm712Buffer.SampleRate) {
+                while (output.BufferedFrames > MaximumBufferedSeconds * Pcm714Buffer.SampleRate) {
                     await Task.Delay(10, cancellationToken);
                 }
                 TrueHdRecord record = await protocol.ReadRecordAsync(cancellationToken);

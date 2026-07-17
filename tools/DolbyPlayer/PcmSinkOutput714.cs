@@ -3,67 +3,49 @@ using NAudio.Wave;
 
 namespace DolbyPlayer;
 
-internal sealed class AnalogOutput712 : IDisposable {
+internal sealed class PcmSinkOutput714 : IDisposable {
     static readonly Guid IeeeFloatSubFormat =
         new("00000003-0000-0010-8000-00aa00389b71");
     readonly MMDeviceEnumerator enumerator = new();
-    readonly MMDevice rearDevice;
-    readonly MMDevice heightDevice;
-    readonly WasapiOut rearOutput;
-    readonly WasapiOut heightOutput;
-    readonly int rearBlockAlign;
-    readonly int heightBlockAlign;
-    long rearClockBase;
-    long heightClockBase;
+    readonly MMDevice sinkDevice;
+    readonly WasapiOut sinkOutput;
+    readonly int sinkBlockAlign;
+    long sinkClockBase;
     double mediaClockBase;
     bool disposed;
 
-    public string RearName => rearDevice.FriendlyName;
-    public string HeightName => heightDevice.FriendlyName;
-    public PlaybackState State => rearOutput.PlaybackState;
-    public long RearDeviceBytes => rearOutput.GetPosition();
-    public long HeightDeviceBytes => heightOutput.GetPosition();
-    public double MediaPositionSeconds => mediaClockBase + Math.Min(
-        ClockSeconds(rearOutput.GetPosition() - rearClockBase, rearBlockAlign),
-        ClockSeconds(heightOutput.GetPosition() - heightClockBase, heightBlockAlign));
-    public double ClockSkewMilliseconds => 1000 * (
-        ClockSeconds(rearOutput.GetPosition() - rearClockBase, rearBlockAlign) -
-        ClockSeconds(heightOutput.GetPosition() - heightClockBase, heightBlockAlign));
+    public string OutputName => sinkDevice.FriendlyName;
+    public PlaybackState State => sinkOutput.PlaybackState;
+    public long DeviceBytes => sinkOutput.GetPosition();
+    public double MediaPositionSeconds => mediaClockBase +
+        ClockSeconds(sinkOutput.GetPosition() - sinkClockBase, sinkBlockAlign);
+    public double ClockSkewMilliseconds => 0;
 
-    public AnalogOutput712(Pcm712Buffer buffer, string rearFilter, string heightFilter,
-                           float gain, int latencyMilliseconds = 30) {
-        rearDevice = SelectDevice(rearFilter);
-        heightDevice = SelectDevice(heightFilter);
-        WaveFormat rearFormat = ValidateMixFormat(rearDevice, 8);
-        WaveFormat heightFormat = ValidateMixFormat(heightDevice, 2);
-        rearBlockAlign = rearFormat.BlockAlign;
-        heightBlockAlign = heightFormat.BlockAlign;
+    public PcmSinkOutput714(Pcm714Buffer buffer, string sinkFilter,
+                            float gain, int latencyMilliseconds = 30) {
+        sinkDevice = SelectDevice(sinkFilter);
+        WaveFormat sinkFormat = ValidateMixFormat(sinkDevice, Pcm714Buffer.Channels);
+        sinkBlockAlign = sinkFormat.BlockAlign;
 
-        rearOutput = new WasapiOut(rearDevice, AudioClientShareMode.Shared, true, latencyMilliseconds);
-        heightOutput = new WasapiOut(heightDevice, AudioClientShareMode.Shared, true, latencyMilliseconds);
-        rearOutput.Init(new ProjectedProvider(buffer, 0, 0, 8, rearFormat, gain));
-        heightOutput.Init(new ProjectedProvider(buffer, 1, 8, 2, heightFormat, gain));
+        sinkOutput = new WasapiOut(
+            sinkDevice, AudioClientShareMode.Shared, true, latencyMilliseconds);
+        sinkOutput.Init(new ProjectedProvider(
+            buffer, 0, 0, Pcm714Buffer.Channels, sinkFormat, gain));
     }
 
-    public void Play() {
-        heightOutput.Play();
-        rearOutput.Play();
-    }
+    public void Play() => sinkOutput.Play();
 
     public void ResetClock(double mediaPositionSeconds) {
-        rearClockBase = rearOutput.GetPosition();
-        heightClockBase = heightOutput.GetPosition();
+        sinkClockBase = sinkOutput.GetPosition();
         mediaClockBase = mediaPositionSeconds;
     }
 
     public void Pause() {
-        rearOutput.Pause();
-        heightOutput.Pause();
+        sinkOutput.Pause();
     }
 
     public void Stop() {
-        rearOutput.Stop();
-        heightOutput.Stop();
+        sinkOutput.Stop();
     }
 
     MMDevice SelectDevice(string filter) {
@@ -84,7 +66,7 @@ internal sealed class AnalogOutput712 : IDisposable {
         bool isFloat = format.Encoding == WaveFormatEncoding.IeeeFloat ||
             format is WaveFormatExtensible extensible &&
             extensible.SubFormat == IeeeFloatSubFormat;
-        if (format.SampleRate != Pcm712Buffer.SampleRate || format.Channels != channels ||
+        if (format.SampleRate != Pcm714Buffer.SampleRate || format.Channels != channels ||
             format.BitsPerSample != 32 || !isFloat) {
             throw new InvalidOperationException(
                 $"Incompatible mix format on {device.FriendlyName}: {format}");
@@ -93,20 +75,18 @@ internal sealed class AnalogOutput712 : IDisposable {
     }
 
     static double ClockSeconds(long bytes, int blockAlign) =>
-        Math.Max(0, bytes) / (double)(blockAlign * Pcm712Buffer.SampleRate);
+        Math.Max(0, bytes) / (double)(blockAlign * Pcm714Buffer.SampleRate);
 
     public void Dispose() {
         if (disposed) return;
         disposed = true;
-        rearOutput.Dispose();
-        heightOutput.Dispose();
-        rearDevice.Dispose();
-        heightDevice.Dispose();
+        sinkOutput.Dispose();
+        sinkDevice.Dispose();
         enumerator.Dispose();
     }
 
     sealed class ProjectedProvider : IWaveProvider {
-        readonly Pcm712Buffer source;
+        readonly Pcm714Buffer source;
         readonly int reader;
         readonly int firstChannel;
         readonly int channels;
@@ -115,7 +95,7 @@ internal sealed class AnalogOutput712 : IDisposable {
 
         public WaveFormat WaveFormat { get; }
 
-        public ProjectedProvider(Pcm712Buffer source, int reader, int firstChannel, int channels,
+        public ProjectedProvider(Pcm714Buffer source, int reader, int firstChannel, int channels,
                                  WaveFormat waveFormat, float gain) {
             this.source = source;
             this.reader = reader;

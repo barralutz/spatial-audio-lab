@@ -8,18 +8,16 @@ internal static class PlayerCoordinator {
     public static async Task PlayAsync(PlayerPaths paths, string input, MediaInfo media,
                                        AudioStreamInfo stream, PlayerOptions options,
                                        CancellationToken cancellationToken) {
-        Pcm712Buffer queue = new();
+        Pcm714Buffer queue = new();
         await using IAtmosDecodePipeline decoder = stream.Codec == AtmosCodec.Eac3Joc
             ? new Eac3JocDecodePipeline(input, stream, media.DurationSeconds, queue)
             : new TrueHdStreamDecodePipeline(paths, input, stream, media.DurationSeconds, queue);
-        using AnalogOutput712 audio = new(
-            queue, options.RearFilter, options.HeightFilter, options.Gain);
+        using PcmSinkOutput714 audio = new(queue, options.SinkFilter, options.Gain);
         await using MpvController mpv = new(paths.Mpv, input, options.StartSeconds);
 
         Console.WriteLine($"Audio: 0:{stream.Index} {stream.Codec}, {stream.Channels}ch/{stream.SampleRate} Hz " +
                           $"{stream.Language} {stream.Title}".TrimEnd());
-        Console.WriteLine($"Rear:   {audio.RearName}");
-        Console.WriteLine($"Height: {audio.HeightName}");
+        Console.WriteLine($"PCM 7.1.4 sink: {audio.OutputName}");
         Console.WriteLine("Preparing Atmos prebuffer...");
 
         await mpv.StartAsync(cancellationToken);
@@ -105,7 +103,7 @@ internal static class PlayerCoordinator {
                 double videoTarget = audioPosition + options.AvDelayMilliseconds / 1000;
                 double drift = position - videoTarget;
                 maximumDrift = Math.Max(maximumDrift, Math.Abs(drift));
-                if (Math.Abs(drift) > .25 && queue.BufferedFrames > Pcm712Buffer.SampleRate / 2 &&
+                if (Math.Abs(drift) > .25 && queue.BufferedFrames > Pcm714Buffer.SampleRate / 2 &&
                     DateTime.UtcNow - lastCorrection > TimeSpan.FromSeconds(1)) {
                     await mpv.SeekAsync(videoTarget, cancellationToken);
                     lastCorrection = DateTime.UtcNow;
@@ -156,6 +154,6 @@ internal static class PlayerCoordinator {
 }
 
 internal sealed record PlayerOptions(int? AudioStreamIndex, double StartSeconds, float Gain,
-                                     string RearFilter, string HeightFilter,
+                                     string SinkFilter,
                                      double AvDelayMilliseconds, double? StopAfterSeconds,
                                      bool ControlTest);

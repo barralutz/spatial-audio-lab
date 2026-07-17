@@ -28,16 +28,15 @@ static async Task<int> MainAsync(string[] args) {
 
     if (command == "self-test-audio") {
         double seconds = args.Length >= 3 ? ParseDouble(args[2]) : 10;
-        float gain = args.Length >= 4 ? (float)ParseDouble(args[3]) : .25f;
+        float gain = args.Length >= 4 ? (float)ParseDouble(args[3]) : 1;
         float[] pcm = AtmosChunkRenderer.Render(input, seconds);
-        Pcm712Buffer queue = new();
+        Pcm714Buffer queue = new();
         queue.Reset(0);
         queue.Append(pcm);
-        using AnalogOutput712 output = new(
-            queue, "Altavoces (Realtek(R) Audio)", "2nd output", gain);
-        Console.WriteLine($"Rear: {output.RearName}\nHeight: {output.HeightName}");
+        using PcmSinkOutput714 output = new(queue, "SinkDescription Sample", gain);
+        Console.WriteLine($"PCM 7.1.4 sink: {output.OutputName}");
         output.Play();
-        double duration = pcm.Length / (double)(Pcm712Buffer.Channels * Pcm712Buffer.SampleRate);
+        double duration = pcm.Length / (double)(Pcm714Buffer.Channels * Pcm714Buffer.SampleRate);
         while (queue.MediaPositionSeconds < duration) await Task.Delay(10, cancellation.Token);
         output.Stop();
         Console.WriteLine($"Played {queue.MediaPositionSeconds:F6} s; starvation={queue.StarvationFrames}.");
@@ -57,7 +56,7 @@ static async Task<int> MainAsync(string[] args) {
     if (command == "decode-test") {
         PlayerOptions testOptions = ParseOptions(args.Skip(2).ToArray());
         AudioStreamInfo testStream = media.Select(testOptions.AudioStreamIndex);
-        Pcm712Buffer testQueue = new();
+        Pcm714Buffer testQueue = new();
         await using IAtmosDecodePipeline testDecoder = testStream.Codec == AtmosCodec.Eac3Joc
             ? new Eac3JocDecodePipeline(input, testStream, media.DurationSeconds, testQueue)
             : new TrueHdStreamDecodePipeline(paths, input, testStream, media.DurationSeconds, testQueue);
@@ -66,7 +65,7 @@ static async Task<int> MainAsync(string[] args) {
         await testDecoder.WaitForPrebufferAsync(5, cancellation.Token);
         if (testDecoder.Failure != null) throw new InvalidOperationException(
             "Atmos decode test failed.", testDecoder.Failure);
-        Console.WriteLine($"Decoded {testQueue.BufferedFrames / (double)Pcm712Buffer.SampleRate:F3} s " +
+        Console.WriteLine($"Decoded {testQueue.BufferedFrames / (double)Pcm714Buffer.SampleRate:F3} s " +
                           $"of {testStream.Codec} in {timer.Elapsed.TotalSeconds:F3} s.");
         PrintChannelLevels(testQueue.SnapshotBuffered());
         return 0;
@@ -74,12 +73,12 @@ static async Task<int> MainAsync(string[] args) {
     if (command == "audio-test") {
         PlayerOptions testOptions = ParseOptions(args.Skip(2).ToArray());
         AudioStreamInfo testStream = media.Select(testOptions.AudioStreamIndex);
-        Pcm712Buffer testQueue = new();
+        Pcm714Buffer testQueue = new();
         await using IAtmosDecodePipeline testDecoder = testStream.Codec == AtmosCodec.Eac3Joc
             ? new Eac3JocDecodePipeline(input, testStream, media.DurationSeconds, testQueue)
             : new TrueHdStreamDecodePipeline(paths, input, testStream, media.DurationSeconds, testQueue);
-        using AnalogOutput712 testOutput = new(testQueue, testOptions.RearFilter,
-            testOptions.HeightFilter, testOptions.Gain);
+        using PcmSinkOutput714 testOutput = new(
+            testQueue, testOptions.SinkFilter, testOptions.Gain);
         double seconds = testOptions.StopAfterSeconds ?? 10;
         double stop = Math.Min(media.DurationSeconds, testOptions.StartSeconds + seconds);
         await testDecoder.RestartAsync(testOptions.StartSeconds, cancellation.Token);
@@ -157,9 +156,8 @@ static async Task<int> MainAsync(string[] args) {
 static PlayerOptions ParseOptions(string[] args) {
     int? stream = null;
     double start = 0;
-    float gain = .25f;
-    string rear = "Altavoces (Realtek(R) Audio)";
-    string height = "2nd output";
+    float gain = 1;
+    string sink = "SinkDescription Sample";
     double avDelay = 0;
     double? stopAfter = null;
     bool controlTest = false;
@@ -169,8 +167,7 @@ static PlayerOptions ParseOptions(string[] args) {
             case "--audio-track": stream = int.Parse(value); ++index; break;
             case "--start": start = ParseDouble(value); ++index; break;
             case "--gain": gain = (float)ParseDouble(value); ++index; break;
-            case "--rear": rear = value; ++index; break;
-            case "--height": height = value; ++index; break;
+            case "--sink": sink = value; ++index; break;
             case "--av-delay-ms": avDelay = ParseDouble(value); ++index; break;
             case "--stop-after": stopAfter = ParseDouble(value); ++index; break;
             case "--control-test": controlTest = true; break;
@@ -180,25 +177,27 @@ static PlayerOptions ParseOptions(string[] args) {
     if (start < 0 || gain < 0 || gain > 1 || stopAfter <= 0) {
         throw new ArgumentOutOfRangeException(nameof(args));
     }
-    return new PlayerOptions(stream, start, gain, rear, height, avDelay, stopAfter, controlTest);
+    return new PlayerOptions(stream, start, gain, sink, avDelay, stopAfter, controlTest);
 }
 
 static double ParseDouble(string value) => double.Parse(
     value, System.Globalization.CultureInfo.InvariantCulture);
 
 static void PrintChannelLevels(float[] pcm) {
-    string[] names = { "FL", "FR", "FC", "LFE", "BL", "BR", "SL", "SR", "TFL", "TFR" };
-    double[] squares = new double[Pcm712Buffer.Channels];
-    float[] peaks = new float[Pcm712Buffer.Channels];
-    int frames = pcm.Length / Pcm712Buffer.Channels;
+    string[] names = {
+        "FL", "FR", "FC", "LFE", "BL", "BR", "SL", "SR", "TFL", "TFR", "TBL", "TBR"
+    };
+    double[] squares = new double[Pcm714Buffer.Channels];
+    float[] peaks = new float[Pcm714Buffer.Channels];
+    int frames = pcm.Length / Pcm714Buffer.Channels;
     for (int frame = 0; frame < frames; ++frame) {
-        for (int channel = 0; channel < Pcm712Buffer.Channels; ++channel) {
-            float value = pcm[frame * Pcm712Buffer.Channels + channel];
+        for (int channel = 0; channel < Pcm714Buffer.Channels; ++channel) {
+            float value = pcm[frame * Pcm714Buffer.Channels + channel];
             squares[channel] += value * value;
             peaks[channel] = Math.Max(peaks[channel], Math.Abs(value));
         }
     }
-    for (int channel = 0; channel < Pcm712Buffer.Channels; ++channel) {
+    for (int channel = 0; channel < Pcm714Buffer.Channels; ++channel) {
         double rms = frames == 0 ? 0 : Math.Sqrt(squares[channel] / frames);
         static string Db(double value) => value > 0 ? $"{20 * Math.Log10(value),7:F2}" : "   -inf";
         Console.WriteLine($"  {names[channel],3}: RMS {Db(rms)} dBFS, peak {Db(peaks[channel])} dBFS");
@@ -208,9 +207,10 @@ static void PrintChannelLevels(float[] pcm) {
 static void PrintUsage() {
     Console.Error.WriteLine("dolby-player inspect <media>");
     Console.Error.WriteLine("dolby-player decode-test <media> [--audio-track N] [--start seconds]");
-    Console.Error.WriteLine("dolby-player audio-test <media> [--start seconds] [--gain 0..1] [--stop-after seconds]");
+    Console.Error.WriteLine("dolby-player audio-test <media> [--start seconds] [--gain 0..1] " +
+                            "[--sink endpoint] [--stop-after seconds]");
     Console.Error.WriteLine("dolby-player video-test <media> [--start seconds]");
     Console.Error.WriteLine("dolby-player play <media> [--audio-track N] [--start seconds] [--gain 0..1] " +
-                            "[--av-delay-ms N] [--stop-after seconds]");
+                            "[--sink endpoint] [--av-delay-ms N] [--stop-after seconds]");
     Console.Error.WriteLine("dolby-player self-test-audio <input.eac3|input.atmos> [seconds] [gain]");
 }

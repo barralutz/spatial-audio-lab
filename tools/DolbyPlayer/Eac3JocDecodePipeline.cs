@@ -18,7 +18,7 @@ internal sealed class Eac3JocDecodePipeline : IAtmosDecodePipeline {
     readonly string input;
     readonly AudioStreamInfo stream;
     readonly double mediaDuration;
-    readonly Pcm712Buffer output;
+    readonly Pcm714Buffer output;
     CancellationTokenSource? producerCancellation;
     Task? producer;
     Exception? failure;
@@ -27,7 +27,7 @@ internal sealed class Eac3JocDecodePipeline : IAtmosDecodePipeline {
     public bool IsCompleted => producer?.IsCompleted == true;
 
     public Eac3JocDecodePipeline(string input, AudioStreamInfo stream, double mediaDuration,
-                                 Pcm712Buffer output) {
+                                 Pcm714Buffer output) {
         this.input = input;
         this.stream = stream;
         this.mediaDuration = mediaDuration;
@@ -45,7 +45,7 @@ internal sealed class Eac3JocDecodePipeline : IAtmosDecodePipeline {
 
     public async Task WaitForPrebufferAsync(double seconds, CancellationToken cancellationToken) {
         long frames = (long)(Math.Min(seconds, Math.Max(0, mediaDuration - output.MediaPositionSeconds)) *
-            Pcm712Buffer.SampleRate);
+            Pcm714Buffer.SampleRate);
         while (output.BufferedFrames < frames) {
             if (failure != null) throw new InvalidOperationException("E-AC-3 JOC decoder failed.", failure);
             if (producer?.IsCompleted == true) break;
@@ -60,7 +60,7 @@ internal sealed class Eac3JocDecodePipeline : IAtmosDecodePipeline {
         MatroskaReader? container = null;
         try {
             if (Interlocked.Exchange(ref channelsInitialized, 1) == 0) {
-                Listener.ReplaceChannels(ChannelPrototype.ToLayout(ChannelPrototype.ref712));
+                Listener.ReplaceChannels(ChannelPrototype.ToLayout(ChannelPrototype.ref714));
             }
 
             double prerollTarget = Math.Max(0, requestedStart - PrerollSeconds);
@@ -69,7 +69,7 @@ internal sealed class Eac3JocDecodePipeline : IAtmosDecodePipeline {
                 Path.GetExtension(input).Equals(".ec3", StringComparison.OrdinalIgnoreCase)) {
                 EnhancedAC3Reader eac3 = new(input);
                 eac3.ReadHeader();
-                if (prerollTarget > 0) eac3.Seek((long)(prerollTarget * Pcm712Buffer.SampleRate));
+                if (prerollTarget > 0) eac3.Seek((long)(prerollTarget * Pcm714Buffer.SampleRate));
                 reader = eac3;
                 decodedStart = prerollTarget;
             } else {
@@ -91,7 +91,7 @@ internal sealed class Eac3JocDecodePipeline : IAtmosDecodePipeline {
             renderer = reader.GetRenderer();
             if (!renderer.HasObjects) throw new InvalidDataException("The E-AC-3 stream has no Atmos objects.");
             Listener listener = new(false) {
-                SampleRate = Pcm712Buffer.SampleRate,
+                SampleRate = Pcm714Buffer.SampleRate,
                 UpdateRate = UpdateRate,
                 AudioQuality = QualityModes.Perfect,
                 Volume = .707f,
@@ -99,24 +99,24 @@ internal sealed class Eac3JocDecodePipeline : IAtmosDecodePipeline {
             listener.AttachSources(renderer.Objects);
 
             long discardFrames = Math.Max(0,
-                (long)Math.Round((requestedStart - decodedStart) * Pcm712Buffer.SampleRate));
+                (long)Math.Round((requestedStart - decodedStart) * Pcm714Buffer.SampleRate));
             long remainingFrames = Math.Max(0,
-                (long)Math.Ceiling((mediaDuration - requestedStart) * Pcm712Buffer.SampleRate));
+                (long)Math.Ceiling((mediaDuration - requestedStart) * Pcm714Buffer.SampleRate));
             while (remainingFrames > 0) {
                 cancellationToken.ThrowIfCancellationRequested();
-                while (output.BufferedFrames > MaximumBufferedSeconds * Pcm712Buffer.SampleRate) {
+                while (output.BufferedFrames > MaximumBufferedSeconds * Pcm714Buffer.SampleRate) {
                     Thread.Sleep(10);
                     cancellationToken.ThrowIfCancellationRequested();
                 }
 
                 float[] block = listener.Render(UpdatesPerBatch);
-                int blockFrames = block.Length / Pcm712Buffer.Channels;
+                int blockFrames = block.Length / Pcm714Buffer.Channels;
                 int firstFrame = (int)Math.Min(discardFrames, blockFrames);
                 discardFrames -= firstFrame;
                 int frames = (int)Math.Min(blockFrames - firstFrame, remainingFrames);
                 if (frames > 0) {
-                    float[] copy = new float[frames * Pcm712Buffer.Channels];
-                    Array.Copy(block, firstFrame * Pcm712Buffer.Channels,
+                    float[] copy = new float[frames * Pcm714Buffer.Channels];
+                    Array.Copy(block, firstFrame * Pcm714Buffer.Channels,
                         copy, 0, copy.Length);
                     output.Append(copy);
                     remainingFrames -= frames;
