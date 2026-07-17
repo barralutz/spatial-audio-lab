@@ -75,9 +75,11 @@ de reproduccion activos en un selector, permite actualizar la lista despues de c
 conserva los filtros de dispositivos desconectados marcandolos como no disponibles. `Restablecer
 posiciones` devuelve azimut y elevacion al esquema 7.1.4 estandar sin cambiar niveles, endpoints ni
 retardos.
-La pestaña `MAT` inicia y detiene `live-layout`, controla ganancia, prebuffer y duracion, muestra el
-PID activo y abre el registro. El puente se ejecuta como proceso independiente y continua activo al
-cerrar el editor; si hace falta elevacion, Windows solicita UAC al ejecutar el script correspondiente.
+La pestaña `Puentes` selecciona `Dolby MAT` o `DTS:X`, inicia y detiene el script correspondiente,
+controla ganancia, prebuffer y duracion, muestra el PID activo y abre su registro. Si un puente ya
+esta ejecutandose, el editor selecciona su modo, bloquea el arranque del otro y dirige `Detener` al
+proceso activo. El puente se ejecuta como proceso independiente y continua activo al cerrar el
+editor; si hace falta elevacion, Windows solicita UAC al ejecutar el script correspondiente.
 
 ```powershell
 .\tools\Build-DolbyProbe.ps1

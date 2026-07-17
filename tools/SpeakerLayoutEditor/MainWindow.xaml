@@ -17,6 +17,40 @@
       <Setter Property="FontFamily" Value="Segoe Fluent Icons" />
       <Setter Property="FontSize" Value="16" />
     </Style>
+    <Style x:Key="SegmentButton" TargetType="RadioButton">
+      <Setter Property="Height" Value="34" />
+      <Setter Property="Foreground" Value="#252A2E" />
+      <Setter Property="Background" Value="#E7EBED" />
+      <Setter Property="BorderBrush" Value="#B8C0C5" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="RadioButton">
+            <Border x:Name="SegmentBorder" Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="4">
+              <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="SegmentBorder" Property="Background" Value="#D8DEE2" />
+              </Trigger>
+              <Trigger Property="IsChecked" Value="True">
+                <Setter TargetName="SegmentBorder" Property="Background" Value="#3478A5" />
+                <Setter TargetName="SegmentBorder" Property="BorderBrush" Value="#286589" />
+                <Setter Property="Foreground" Value="White" />
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="SegmentBorder" Property="Opacity" Value="0.65" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
     <Style TargetType="Slider">
       <Setter Property="Margin" Value="0,4,0,12" />
     </Style>
@@ -229,18 +263,32 @@
               </DataGrid>
             </Grid>
           </TabItem>
-          <TabItem Header="MAT">
+          <TabItem Header="Puentes">
             <ScrollViewer VerticalScrollBarVisibility="Auto">
               <StackPanel Margin="8,18,8,8">
+                <Grid Margin="0,0,0,18">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="8" />
+                    <ColumnDefinition Width="*" />
+                  </Grid.ColumnDefinitions>
+                  <RadioButton x:Name="MatModeButton" Style="{StaticResource SegmentButton}"
+                               GroupName="BridgeMode" IsChecked="True" Content="Dolby MAT"
+                               Click="BridgeModeClick" />
+                  <RadioButton Grid.Column="2" x:Name="DtsXModeButton"
+                               Style="{StaticResource SegmentButton}" GroupName="BridgeMode"
+                               Content="DTS:X" Click="BridgeModeClick" />
+                </Grid>
+
                 <Grid Margin="0,0,0,22">
                   <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="18" />
                     <ColumnDefinition Width="*" />
                   </Grid.ColumnDefinitions>
-                  <Ellipse x:Name="MatStatusDot" Width="10" Height="10"
+                  <Ellipse x:Name="BridgeStatusDot" Width="10" Height="10"
                            Fill="#8B949A" HorizontalAlignment="Left"
                            VerticalAlignment="Center" />
-                  <TextBlock Grid.Column="1" x:Name="MatStatusText" Text="Comprobando..."
+                  <TextBlock Grid.Column="1" x:Name="BridgeStatusText" Text="Comprobando..."
                              FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" />
                 </Grid>
 
@@ -250,10 +298,10 @@
                     <ColumnDefinition Width="80" />
                   </Grid.ColumnDefinitions>
                   <TextBlock Text="Ganancia" />
-                  <TextBlock Grid.Column="1" x:Name="MatGainValue" TextAlignment="Right" />
+                  <TextBlock Grid.Column="1" x:Name="BridgeGainValue" TextAlignment="Right" />
                 </Grid>
-                <Slider x:Name="MatGainSlider" Minimum="0" Maximum="1" Value="0.25"
-                        TickFrequency="0.01" ValueChanged="MatControlChanged" />
+                <Slider x:Name="BridgeGainSlider" Minimum="0" Maximum="1" Value="0.25"
+                        TickFrequency="0.01" ValueChanged="BridgeControlChanged" />
 
                 <Grid>
                   <Grid.ColumnDefinitions>
@@ -261,11 +309,11 @@
                     <ColumnDefinition Width="80" />
                   </Grid.ColumnDefinitions>
                   <TextBlock Text="Prebuffer" />
-                  <TextBlock Grid.Column="1" x:Name="MatPrebufferValue" TextAlignment="Right" />
+                  <TextBlock Grid.Column="1" x:Name="BridgePrebufferValue" TextAlignment="Right" />
                 </Grid>
-                <Slider x:Name="MatPrebufferSlider" Minimum="20" Maximum="500" Value="80"
+                <Slider x:Name="BridgePrebufferSlider" Minimum="20" Maximum="500" Value="80"
                         TickFrequency="10" IsSnapToTickEnabled="True"
-                        ValueChanged="MatControlChanged" />
+                        ValueChanged="BridgeControlChanged" />
 
                 <Grid>
                   <Grid.ColumnDefinitions>
@@ -273,11 +321,11 @@
                     <ColumnDefinition Width="80" />
                   </Grid.ColumnDefinitions>
                   <TextBlock Text="Duracion" />
-                  <TextBlock Grid.Column="1" x:Name="MatDurationValue" TextAlignment="Right" />
+                  <TextBlock Grid.Column="1" x:Name="BridgeDurationValue" TextAlignment="Right" />
                 </Grid>
-                <Slider x:Name="MatDurationSlider" Minimum="1" Maximum="60" Value="60"
+                <Slider x:Name="BridgeDurationSlider" Minimum="1" Maximum="60" Value="60"
                         TickFrequency="1" IsSnapToTickEnabled="True"
-                        ValueChanged="MatControlChanged" />
+                        ValueChanged="BridgeControlChanged" />
 
                 <Grid Margin="0,12,0,0">
                   <Grid.ColumnDefinitions>
@@ -285,15 +333,15 @@
                     <ColumnDefinition Width="10" />
                     <ColumnDefinition Width="*" />
                   </Grid.ColumnDefinitions>
-                  <Button x:Name="MatStartButton" Height="42" Click="StartMatClick">
+                  <Button x:Name="BridgeStartButton" Height="42" Click="StartBridgeClick">
                     <StackPanel Orientation="Horizontal">
                       <TextBlock FontFamily="Segoe Fluent Icons" Text="&#xE768;"
                                  FontSize="16" Margin="0,0,8,0" />
                       <TextBlock Text="Iniciar" />
                     </StackPanel>
                   </Button>
-                  <Button Grid.Column="2" x:Name="MatStopButton" Height="42"
-                          Click="StopMatClick" IsEnabled="False">
+                  <Button Grid.Column="2" x:Name="BridgeStopButton" Height="42"
+                          Click="StopBridgeClick" IsEnabled="False">
                     <StackPanel Orientation="Horizontal">
                       <TextBlock FontFamily="Segoe Fluent Icons" Text="&#xE71A;"
                                  FontSize="16" Margin="0,0,8,0" />
@@ -302,8 +350,8 @@
                   </Button>
                 </Grid>
 
-                <Button x:Name="MatOpenLogButton" Height="36" Margin="0,12,0,0"
-                        Click="OpenMatLogClick">
+                <Button x:Name="BridgeOpenLogButton" Height="36" Margin="0,12,0,0"
+                        Click="OpenBridgeLogClick">
                   <StackPanel Orientation="Horizontal">
                     <TextBlock FontFamily="Segoe Fluent Icons" Text="&#xE8A5;"
                                FontSize="15" Margin="0,0,8,0" />

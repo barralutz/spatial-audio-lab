@@ -24,6 +24,11 @@ sealed record PhysicalDestinationChoice(OutputRouteDefinition Output,
                                         int ChannelIndex,
                                         string DisplayName);
 
+enum BridgeMode {
+    Mat,
+    DtsX
+}
+
 public partial class MainWindow : Window {
     static readonly Color[] RouteColors = [
         Color.FromRgb(52, 120, 165),
@@ -42,7 +47,7 @@ public partial class MainWindow : Window {
     readonly string repoRoot;
     readonly List<AudioEndpointInfo> activeEndpoints = [];
     readonly ObservableCollection<PhysicalDestinationChoice> physicalDestinationChoices = [];
-    readonly DispatcherTimer matStatusTimer = new() {
+    readonly DispatcherTimer bridgeStatusTimer = new() {
         Interval = TimeSpan.FromSeconds(1)
     };
     LayoutDocument? document;
@@ -55,7 +60,7 @@ public partial class MainWindow : Window {
     Vector dragPointerOffset;
     bool dragActivated;
     bool updatingEndpointChoices;
-    bool matCommandRunning;
+    bool bridgeCommandRunning;
     public ObservableCollection<EndpointChoice> EndpointChoices { get; } = [];
 
     public MainWindow() {
@@ -63,16 +68,16 @@ public partial class MainWindow : Window {
         PhysicalDestinationCombo.ItemsSource = physicalDestinationChoices;
         repoRoot = FindRepoRoot();
         Loaded += WindowLoaded;
-        Closed += (_, _) => matStatusTimer.Stop();
-        matStatusTimer.Tick += (_, _) => UpdateMatStatus();
-        UpdateMatControlLabels();
+        Closed += (_, _) => bridgeStatusTimer.Stop();
+        bridgeStatusTimer.Tick += (_, _) => UpdateBridgeStatus();
+        UpdateBridgeControlLabels();
     }
 
     async void WindowLoaded(object sender, RoutedEventArgs e) {
         LoadProfile(IOPath.Combine(repoRoot, "configs", "realtek-c1u-714.ini"));
         await RefreshEndpointsAsync();
-        UpdateMatStatus();
-        matStatusTimer.Start();
+        UpdateBridgeStatus();
+        bridgeStatusTimer.Start();
     }
 
     static string FindRepoRoot() {
@@ -232,28 +237,64 @@ public partial class MainWindow : Window {
         return endpointId[start..Math.Max(start, closingBrace)];
     }
 
-    void MatControlChanged(object sender, RoutedPropertyChangedEventArgs<double> e) =>
-        UpdateMatControlLabels();
+    BridgeMode SelectedBridgeMode =>
+        DtsXModeButton.IsChecked == true ? BridgeMode.DtsX : BridgeMode.Mat;
 
-    void UpdateMatControlLabels() {
-        if (MatGainValue is null || MatPrebufferValue is null || MatDurationValue is null) return;
-        MatGainValue.Text = MatGainSlider.Value.ToString("0.00", CultureInfo.InvariantCulture);
-        MatPrebufferValue.Text = $"{Math.Round(MatPrebufferSlider.Value):0} ms";
-        MatDurationValue.Text = $"{Math.Round(MatDurationSlider.Value):0} min";
+    static string BridgeName(BridgeMode mode) => mode switch {
+        BridgeMode.Mat => "Dolby MAT",
+        BridgeMode.DtsX => "DTS:X",
+        _ => throw new ArgumentOutOfRangeException(nameof(mode))
+    };
+
+    static string BridgeStartScript(BridgeMode mode) => mode switch {
+        BridgeMode.Mat => "Start-Live714.ps1",
+        BridgeMode.DtsX => "Start-LiveDtsX714.ps1",
+        _ => throw new ArgumentOutOfRangeException(nameof(mode))
+    };
+
+    static string BridgeStopScript(BridgeMode mode) => mode switch {
+        BridgeMode.Mat => "Stop-Live714.ps1",
+        BridgeMode.DtsX => "Stop-LiveDtsX714.ps1",
+        _ => throw new ArgumentOutOfRangeException(nameof(mode))
+    };
+
+    string BridgePidPath(BridgeMode mode) => IOPath.Combine(
+        repoRoot, "captures", mode == BridgeMode.Mat ? "live-714.pid" : "live-dtsx-714.pid");
+
+    string BridgeLogPath(BridgeMode mode) => IOPath.Combine(
+        repoRoot, "captures", mode == BridgeMode.Mat ? "live-714.log" : "live-dtsx-714.log");
+
+    void BridgeControlChanged(object sender, RoutedPropertyChangedEventArgs<double> e) =>
+        UpdateBridgeControlLabels();
+
+    void UpdateBridgeControlLabels() {
+        if (BridgeGainValue is null || BridgePrebufferValue is null ||
+            BridgeDurationValue is null) return;
+        BridgeGainValue.Text = BridgeGainSlider.Value.ToString("0.00", CultureInfo.InvariantCulture);
+        BridgePrebufferValue.Text = $"{Math.Round(BridgePrebufferSlider.Value):0} ms";
+        BridgeDurationValue.Text = $"{Math.Round(BridgeDurationSlider.Value):0} min";
     }
 
-    string MatPidPath => IOPath.Combine(repoRoot, "captures", "live-714.pid");
-    string MatLogPath => IOPath.Combine(repoRoot, "captures", "live-714.log");
+    void BridgeModeClick(object sender, RoutedEventArgs e) => UpdateBridgeStatus();
 
-    bool TryGetLiveMatProcess(out Process? process) {
+    void SelectBridgeMode(BridgeMode mode) {
+        MatModeButton.IsChecked = mode == BridgeMode.Mat;
+        DtsXModeButton.IsChecked = mode == BridgeMode.DtsX;
+    }
+
+    bool TryGetLiveBridgeProcess(BridgeMode mode, out Process? process) {
         process = null;
         try {
-            if (!File.Exists(MatPidPath)) return false;
-            string value = File.ReadAllText(MatPidPath).Trim();
+            string pidPath = BridgePidPath(mode);
+            if (!File.Exists(pidPath)) return false;
+            string value = File.ReadAllText(pidPath).Trim();
             if (!int.TryParse(value, out int processId)) return false;
             process = Process.GetProcessById(processId);
-            return !process.HasExited && process.ProcessName.Equals(
-                "dolby-probe", StringComparison.OrdinalIgnoreCase);
+            if (!process.HasExited && process.ProcessName.Equals(
+                    "dolby-probe", StringComparison.OrdinalIgnoreCase)) return true;
+            process.Dispose();
+            process = null;
+            return false;
         } catch (Exception error) when (error is ArgumentException or IOException or
                                             InvalidOperationException or UnauthorizedAccessException) {
             process?.Dispose();
@@ -262,53 +303,89 @@ public partial class MainWindow : Window {
         }
     }
 
-    void UpdateMatStatus() {
-        bool running = TryGetLiveMatProcess(out Process? process);
-        using (process) {
-            if (!matCommandRunning) {
-                MatStatusText.Text = running ? $"MAT activo · PID {process!.Id}" : "MAT detenido";
-            }
+    List<BridgeMode> RunningBridgeModes() {
+        List<BridgeMode> result = [];
+        foreach (BridgeMode mode in Enum.GetValues<BridgeMode>()) {
+            if (TryGetLiveBridgeProcess(mode, out Process? process)) result.Add(mode);
+            process?.Dispose();
         }
-        MatStatusDot.Fill = new SolidColorBrush(running
-            ? Color.FromRgb(55, 145, 99)
-            : Color.FromRgb(139, 148, 154));
-        if (!matCommandRunning) {
-            MatStartButton.IsEnabled = !running;
-            MatStopButton.IsEnabled = running;
-        }
-        MatGainSlider.IsEnabled = !running && !matCommandRunning;
-        MatPrebufferSlider.IsEnabled = !running && !matCommandRunning;
-        MatDurationSlider.IsEnabled = !running && !matCommandRunning;
-        MatOpenLogButton.IsEnabled = File.Exists(MatLogPath);
+        return result;
     }
 
-    async void StartMatClick(object sender, RoutedEventArgs e) {
+    void UpdateBridgeStatus() {
+        List<BridgeMode> runningModes = RunningBridgeModes();
+        BridgeMode statusMode = runningModes.Count == 1 ? runningModes[0] : SelectedBridgeMode;
+        if (runningModes.Count == 1) SelectBridgeMode(statusMode);
+
+        if (!bridgeCommandRunning) {
+            if (runningModes.Count > 1) {
+                BridgeStatusText.Text = "MAT y DTS:X activos";
+            } else if (runningModes.Count == 1 &&
+                       TryGetLiveBridgeProcess(statusMode, out Process? process)) {
+                using (process) {
+                    BridgeStatusText.Text = $"{BridgeName(statusMode)} activo · PID {process!.Id}";
+                }
+            } else {
+                BridgeStatusText.Text = $"{BridgeName(statusMode)} detenido";
+            }
+        }
+
+        bool anyRunning = runningModes.Count != 0;
+        BridgeStatusDot.Fill = new SolidColorBrush(runningModes.Count > 1
+            ? Color.FromRgb(178, 80, 65)
+            : anyRunning
+                ? Color.FromRgb(55, 145, 99)
+                : Color.FromRgb(139, 148, 154));
+        if (!bridgeCommandRunning) {
+            BridgeStartButton.IsEnabled = !anyRunning;
+            BridgeStopButton.IsEnabled = anyRunning;
+        }
+        MatModeButton.IsEnabled = !anyRunning && !bridgeCommandRunning;
+        DtsXModeButton.IsEnabled = !anyRunning && !bridgeCommandRunning;
+        BridgeGainSlider.IsEnabled = !anyRunning && !bridgeCommandRunning;
+        BridgePrebufferSlider.IsEnabled = !anyRunning && !bridgeCommandRunning;
+        BridgeDurationSlider.IsEnabled = !anyRunning && !bridgeCommandRunning;
+        BridgeOpenLogButton.IsEnabled = File.Exists(BridgeLogPath(statusMode));
+    }
+
+    async void StartBridgeClick(object sender, RoutedEventArgs e) {
         if (currentPath is null) return;
-        if (TryGetLiveMatProcess(out Process? existing)) {
-            existing?.Dispose();
-            UpdateMatStatus();
+        if (RunningBridgeModes().Count != 0) {
+            UpdateBridgeStatus();
             return;
         }
         if (!SaveProfile(currentPath)) return;
-        int durationSeconds = (int)Math.Round(MatDurationSlider.Value) * 60;
+
+        BridgeMode mode = SelectedBridgeMode;
+        int durationSeconds = (int)Math.Round(BridgeDurationSlider.Value) * 60;
         string[] arguments = [
             "-DurationSeconds", durationSeconds.ToString(CultureInfo.InvariantCulture),
-            "-Gain", MatGainSlider.Value.ToString("0.###", CultureInfo.InvariantCulture),
+            "-Gain", BridgeGainSlider.Value.ToString("0.###", CultureInfo.InvariantCulture),
             "-PrebufferMilliseconds",
-            ((int)Math.Round(MatPrebufferSlider.Value)).ToString(CultureInfo.InvariantCulture),
+            ((int)Math.Round(BridgePrebufferSlider.Value)).ToString(CultureInfo.InvariantCulture),
             "-Layout", currentPath
         ];
-        await RunMatCommandAsync("Start-Live714.ps1", arguments, "iniciar");
+        await RunBridgeCommandAsync(BridgeStartScript(mode), arguments, mode, "iniciar");
     }
 
-    async void StopMatClick(object sender, RoutedEventArgs e) =>
-        await RunMatCommandAsync("Stop-Live714.ps1", [], "detener");
+    async void StopBridgeClick(object sender, RoutedEventArgs e) {
+        List<BridgeMode> runningModes = RunningBridgeModes();
+        foreach (BridgeMode mode in runningModes) {
+            await RunBridgeCommandAsync(BridgeStopScript(mode), [], mode, "detener");
+        }
+    }
 
-    async Task RunMatCommandAsync(string scriptName, string[] arguments, string operation) {
-        matCommandRunning = true;
-        MatStartButton.IsEnabled = false;
-        MatStopButton.IsEnabled = false;
-        MatStatusText.Text = operation == "iniciar" ? "Iniciando MAT..." : "Deteniendo MAT...";
+    async Task RunBridgeCommandAsync(string scriptName,
+                                     string[] arguments,
+                                     BridgeMode mode,
+                                     string operation) {
+        string bridgeName = BridgeName(mode);
+        bridgeCommandRunning = true;
+        BridgeStartButton.IsEnabled = false;
+        BridgeStopButton.IsEnabled = false;
+        BridgeStatusText.Text = operation == "iniciar"
+            ? $"Iniciando {bridgeName}..."
+            : $"Deteniendo {bridgeName}...";
         try {
             ScriptResult result = await RunPowerShellScriptAsync(
                 IOPath.Combine(repoRoot, "tools", scriptName), arguments);
@@ -317,21 +394,23 @@ public partial class MainWindow : Window {
                     ? result.Output.Trim()
                     : result.Error.Trim();
                 throw new InvalidOperationException(string.IsNullOrWhiteSpace(detail)
-                    ? $"No se pudo {operation} MAT (codigo {result.ExitCode})."
+                    ? $"No se pudo {operation} {bridgeName} (codigo {result.ExitCode})."
                     : detail);
             }
             await Task.Delay(350);
-            UpdateMatStatus();
-            StatusText.Text = operation == "iniciar" ? "MAT iniciado" : "MAT detenido";
+            UpdateBridgeStatus();
+            StatusText.Text = operation == "iniciar"
+                ? $"{bridgeName} iniciado"
+                : $"{bridgeName} detenido";
         } catch (Win32Exception error) when (error.NativeErrorCode == 1223) {
-            StatusText.Text = "Operacion MAT cancelada";
+            StatusText.Text = $"Operacion {bridgeName} cancelada";
         } catch (Exception error) {
-            MessageBox.Show(this, error.Message, $"No se pudo {operation} MAT",
+            MessageBox.Show(this, error.Message, $"No se pudo {operation} {bridgeName}",
                 MessageBoxButton.OK, MessageBoxImage.Error);
-            StatusText.Text = $"Error al {operation} MAT";
+            StatusText.Text = $"Error al {operation} {bridgeName}";
         } finally {
-            matCommandRunning = false;
-            UpdateMatStatus();
+            bridgeCommandRunning = false;
+            UpdateBridgeStatus();
         }
     }
 
@@ -377,9 +456,12 @@ public partial class MainWindow : Window {
             WindowsBuiltInRole.Administrator);
     }
 
-    void OpenMatLogClick(object sender, RoutedEventArgs e) {
-        if (!File.Exists(MatLogPath)) return;
-        Process.Start(new ProcessStartInfo(MatLogPath) { UseShellExecute = true });
+    void OpenBridgeLogClick(object sender, RoutedEventArgs e) {
+        List<BridgeMode> runningModes = RunningBridgeModes();
+        BridgeMode mode = runningModes.Count == 1 ? runningModes[0] : SelectedBridgeMode;
+        string logPath = BridgeLogPath(mode);
+        if (!File.Exists(logPath)) return;
+        Process.Start(new ProcessStartInfo(logPath) { UseShellExecute = true });
     }
 
     void PopulateRouteLegend() {
