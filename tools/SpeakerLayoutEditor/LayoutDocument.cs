@@ -1,203 +1,286 @@
 using System.ComponentModel;
-using System.Globalization;
 using System.IO;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
-using System.Text;
+using SpatialAudioLab.Core.Audio;
+using SpatialAudioLab.Core.Profiles;
+using CoreOutputRoute = SpatialAudioLab.Core.Profiles.OutputRouteDefinition;
+using CoreProfile = SpatialAudioLab.Core.Profiles.ProfileDocument;
+using CoreSpeaker = SpatialAudioLab.Core.Profiles.SpeakerDefinition;
 
 namespace SpeakerLayoutEditor;
 
-internal sealed class SpeakerDefinition : INotifyPropertyChanged {
-    string name = "";
-    double azimuth;
-    double elevation;
-    double trimDb;
+internal sealed class SpeakerDefinition : INotifyPropertyChanged
+{
+    private string name = string.Empty;
+    private double azimuth;
+    private double elevation;
+    private double trimDb;
 
     public string Name { get => name; set => Set(ref name, value); }
+
     public double Azimuth { get => azimuth; set => Set(ref azimuth, value); }
+
     public double Elevation { get => elevation; set => Set(ref elevation, value); }
+
     public double TrimDb { get => trimDb; set => Set(ref trimDb, value); }
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
-    void Set<T>(ref T field, T value, [CallerMemberName] string? property = null) {
-        if (EqualityComparer<T>.Default.Equals(field, value)) return;
+    private void Set<T>(ref T field, T value, [CallerMemberName] string? property = null)
+    {
+        if (EqualityComparer<T>.Default.Equals(field, value))
+        {
+            return;
+        }
+
         field = value;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(property));
     }
 }
 
-internal sealed class OutputRouteDefinition : INotifyPropertyChanged {
-    static readonly IReadOnlyDictionary<int, string[]> StandardChannelNames =
-        new Dictionary<int, string[]> {
+internal sealed class OutputRouteDefinition : INotifyPropertyChanged
+{
+    private static readonly IReadOnlyDictionary<int, string[]> StandardChannelNames =
+        new Dictionary<int, string[]>
+        {
             [1] = ["MONO"],
             [2] = ["FL", "FR"],
             [6] = ["FL", "FR", "FC", "LFE", "SL", "SR"],
             [8] = ["FL", "FR", "FC", "LFE", "BL", "BR", "SL", "SR"],
             [10] = ["FL", "FR", "FC", "LFE", "BL", "BR", "SL", "SR", "TFL", "TFR"],
-            [12] = ["FL", "FR", "FC", "LFE", "BL", "BR", "SL", "SR",
-                    "TFL", "TFR", "TBL", "TBR"]
+            [12] =
+            [
+                "FL", "FR", "FC", "LFE", "BL", "BR", "SL", "SR",
+                "TFL", "TFR", "TBL", "TBR"
+            ]
         };
 
-    string name = "";
-    string endpoint = "";
-    double delayMilliseconds;
+    private string name = string.Empty;
+    private string endpointId = string.Empty;
+    private string endpointName = string.Empty;
+    private string? containerId;
+    private int expectedChannels;
+    private double delayMilliseconds;
 
     public string Name { get => name; set => Set(ref name, value); }
-    public string Endpoint { get => endpoint; set => Set(ref endpoint, value); }
-    public double DelayMilliseconds {
+
+    public string EndpointId { get => endpointId; private set => Set(ref endpointId, value); }
+
+    public string EndpointName { get => endpointName; private set => Set(ref endpointName, value); }
+
+    public string? ContainerId { get => containerId; private set => Set(ref containerId, value); }
+
+    public int ExpectedChannels
+    {
+        get => expectedChannels;
+        private set => Set(ref expectedChannels, value);
+    }
+
+    public string Endpoint => string.IsNullOrWhiteSpace(EndpointId) ? EndpointName : EndpointId;
+
+    public double DelayMilliseconds
+    {
         get => delayMilliseconds;
         set => Set(ref delayMilliseconds, Math.Clamp(value, 0, 500));
     }
-    public List<string> Speakers { get; } = new();
+
+    public List<string> Speakers { get; } = [];
+
     public string SpeakersText => string.Join(", ", Speakers);
+
     public string ChannelMapText => string.Join(", ", Speakers.Select(
         (speaker, index) => $"{PhysicalChannelName(index)}<-{speaker}"));
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
-    public string PhysicalChannelName(int index) {
-        if (index < 0 || index >= Speakers.Count) throw new ArgumentOutOfRangeException(nameof(index));
+    public void ConfigureEndpoint(
+        string id,
+        string friendlyName,
+        string? stableContainerId,
+        int maximumChannels)
+    {
+        EndpointId = id;
+        EndpointName = friendlyName;
+        ContainerId = stableContainerId;
+        ExpectedChannels = maximumChannels;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Endpoint)));
+    }
+
+    public void ConfigureEndpoint(AudioEndpointDescriptor endpoint)
+    {
+        ConfigureEndpoint(
+            endpoint.Id,
+            endpoint.Name,
+            endpoint.ContainerId,
+            endpoint.MaximumChannels48k);
+    }
+
+    public string PhysicalChannelName(int index)
+    {
+        if (index < 0 || index >= Speakers.Count)
+        {
+            throw new ArgumentOutOfRangeException(nameof(index));
+        }
+
         return StandardChannelNames.TryGetValue(Speakers.Count, out string[]? names)
             ? names[index]
             : $"CH{index + 1}";
     }
 
-    public void NotifySpeakersChanged() {
+    public void NotifySpeakersChanged()
+    {
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpeakersText)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ChannelMapText)));
     }
 
-    void Set<T>(ref T field, T value, [CallerMemberName] string? property = null) {
-        if (EqualityComparer<T>.Default.Equals(field, value)) return;
+    private void Set<T>(ref T field, T value, [CallerMemberName] string? property = null)
+    {
+        if (EqualityComparer<T>.Default.Equals(field, value))
+        {
+            return;
+        }
+
         field = value;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(property));
     }
 }
 
-internal sealed class LayoutDocument {
-    const int BufferCharacters = 32_768;
+internal sealed class LayoutDocument
+{
+    public Guid Id { get; init; }
 
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
-    static extern uint GetPrivateProfileString(
-        string section, string key, string defaultValue, StringBuilder value,
-        uint size, string filePath);
+    public string Name { get; set; } = string.Empty;
 
-    public string Name { get; set; } = "";
-    public string MasterOutput { get; set; } = "";
-    public List<SpeakerDefinition> Speakers { get; } = new();
-    public List<OutputRouteDefinition> Outputs { get; } = new();
+    public string LayoutId { get; init; } = "custom";
 
-    public static LayoutDocument Load(string path) {
-        path = Path.GetFullPath(path);
-        LayoutDocument result = new() {
-            Name = Read(path, "layout", "name"),
-            MasterOutput = Read(path, "layout", "master")
-        };
-        foreach (string name in Split(Read(path, "layout", "speakers"))) {
-            string section = $"speaker.{name}";
-            result.Speakers.Add(new SpeakerDefinition {
-                Name = name,
-                Azimuth = ReadDouble(path, section, "azimuth"),
-                Elevation = ReadDouble(path, section, "elevation"),
-                TrimDb = ReadDouble(path, section, "trim_db")
-            });
+    public string MasterOutput { get; set; } = string.Empty;
+
+    public List<SpeakerDefinition> Speakers { get; } = [];
+
+    public List<OutputRouteDefinition> Outputs { get; } = [];
+
+    public static LayoutDocument Load(string path)
+    {
+        try
+        {
+            return FromProfile(ProfileIniSerializer.Load(path));
         }
-        foreach (string name in Split(Read(path, "layout", "outputs"))) {
-            string section = $"output.{name}";
-            OutputRouteDefinition output = new() {
-                Name = name,
-                Endpoint = Read(path, section, "endpoint"),
-                DelayMilliseconds = ReadDouble(path, section, "delay_ms")
+        catch (InvalidDataException error) when (
+            error.Message.Contains("[profile]", StringComparison.OrdinalIgnoreCase))
+        {
+            return FromProfile(ProfileIniSerializer.ImportVersion1(path));
+        }
+    }
+
+    public static LayoutDocument FromProfile(CoreProfile profile)
+    {
+        LayoutDocument result = new()
+        {
+            Id = profile.Id,
+            Name = profile.Name,
+            LayoutId = profile.LayoutId,
+            MasterOutput = profile.MasterOutput
+        };
+        result.Speakers.AddRange(profile.Speakers.Select(speaker => new SpeakerDefinition
+        {
+            Name = speaker.Name,
+            Azimuth = speaker.Azimuth,
+            Elevation = speaker.Elevation,
+            TrimDb = speaker.TrimDb
+        }));
+        foreach (CoreOutputRoute route in profile.Outputs)
+        {
+            OutputRouteDefinition output = new()
+            {
+                Name = route.Name,
+                DelayMilliseconds = route.DelayMilliseconds
             };
-            output.Speakers.AddRange(Split(Read(path, section, "speakers")));
+            output.ConfigureEndpoint(
+                route.Endpoint.Id,
+                route.Endpoint.FriendlyName,
+                route.Endpoint.ContainerId,
+                route.Endpoint.ExpectedChannels);
+            output.Speakers.AddRange(route.Speakers);
             result.Outputs.Add(output);
         }
-        if (result.Speakers.Count == 0 || result.Outputs.Count == 0) {
-            throw new InvalidDataException("El perfil no contiene parlantes o salidas.");
-        }
+
         return result;
     }
 
-    public void Save(string path) {
-        StringBuilder text = new();
-        text.AppendLine("[layout]");
-        text.AppendLine($"name={Name}");
-        text.AppendLine($"speakers={string.Join(',', Speakers.Select(speaker => speaker.Name))}");
-        text.AppendLine($"outputs={string.Join(',', Outputs.Select(output => output.Name))}");
-        text.AppendLine($"master={MasterOutput}");
-        foreach (SpeakerDefinition speaker in Speakers) {
-            text.AppendLine();
-            text.AppendLine($"[speaker.{speaker.Name}]");
-            text.AppendLine($"azimuth={Number(speaker.Azimuth)}");
-            text.AppendLine($"elevation={Number(speaker.Elevation)}");
-            text.AppendLine($"trim_db={Number(speaker.TrimDb)}");
-        }
-        foreach (OutputRouteDefinition output in Outputs) {
-            text.AppendLine();
-            text.AppendLine($"[output.{output.Name}]");
-            text.AppendLine($"endpoint={output.Endpoint}");
-            text.AppendLine($"speakers={string.Join(',', output.Speakers)}");
-            text.AppendLine($"delay_ms={Number(output.DelayMilliseconds)}");
-        }
-        File.WriteAllText(path, text.ToString().Replace("\r\n", "\n"),
-            new UTF8Encoding(false));
+    public CoreProfile ToProfile()
+    {
+        return new CoreProfile
+        {
+            Id = Id,
+            Name = Name,
+            LayoutId = LayoutId,
+            MasterOutput = MasterOutput,
+            Speakers = Speakers.Select(speaker => new CoreSpeaker(
+                speaker.Name,
+                speaker.Azimuth,
+                speaker.Elevation,
+                speaker.TrimDb)).ToList(),
+            Outputs = Outputs.Select(output => new CoreOutputRoute(
+                output.Name,
+                new EndpointIdentity(
+                    output.EndpointId,
+                    output.EndpointName,
+                    output.ContainerId,
+                    output.ExpectedChannels),
+                output.Speakers.ToList(),
+                output.DelayMilliseconds)).ToList()
+        };
     }
+
+    public void Save(string path) => ProfileIniSerializer.Save(path, ToProfile());
 
     public OutputRouteDefinition? OutputFor(string speakerName) =>
         Outputs.FirstOrDefault(output => output.Speakers.Contains(
-            speakerName, StringComparer.OrdinalIgnoreCase));
+            speakerName,
+            StringComparer.OrdinalIgnoreCase));
 
-    public (OutputRouteDefinition Output, int ChannelIndex)? SlotFor(string speakerName) {
-        foreach (OutputRouteDefinition output in Outputs) {
+    public (OutputRouteDefinition Output, int ChannelIndex)? SlotFor(string speakerName)
+    {
+        foreach (OutputRouteDefinition output in Outputs)
+        {
             int index = output.Speakers.FindIndex(name => name.Equals(
-                speakerName, StringComparison.OrdinalIgnoreCase));
-            if (index >= 0) return (output, index);
+                speakerName,
+                StringComparison.OrdinalIgnoreCase));
+            if (index >= 0)
+            {
+                return (output, index);
+            }
         }
+
         return null;
     }
 
-    public string AssignSpeakerToSlot(string speakerName,
-                                      OutputRouteDefinition target,
-                                      int targetChannelIndex) {
+    public string AssignSpeakerToSlot(
+        string speakerName,
+        OutputRouteDefinition target,
+        int targetChannelIndex)
+    {
         var source = SlotFor(speakerName) ??
             throw new InvalidDataException($"El parlante {speakerName} no tiene una salida.");
-        if (targetChannelIndex < 0 || targetChannelIndex >= target.Speakers.Count) {
+        if (targetChannelIndex < 0 || targetChannelIndex >= target.Speakers.Count)
+        {
             throw new ArgumentOutOfRangeException(nameof(targetChannelIndex));
         }
 
         string displacedSpeaker = target.Speakers[targetChannelIndex];
-        if (ReferenceEquals(source.Output, target) && source.ChannelIndex == targetChannelIndex) {
+        if (ReferenceEquals(source.Output, target) && source.ChannelIndex == targetChannelIndex)
+        {
             return displacedSpeaker;
         }
 
         source.Output.Speakers[source.ChannelIndex] = displacedSpeaker;
         target.Speakers[targetChannelIndex] = speakerName;
         source.Output.NotifySpeakersChanged();
-        if (!ReferenceEquals(source.Output, target)) target.NotifySpeakersChanged();
+        if (!ReferenceEquals(source.Output, target))
+        {
+            target.NotifySpeakersChanged();
+        }
+
         return displacedSpeaker;
     }
-
-    static string Read(string path, string section, string key) {
-        StringBuilder value = new(BufferCharacters);
-        uint copied = GetPrivateProfileString(
-            section, key, "", value, BufferCharacters, path);
-        if (copied == 0) throw new InvalidDataException($"Falta [{section}] {key}.");
-        return value.ToString().Trim();
-    }
-
-    static double ReadDouble(string path, string section, string key) {
-        string value = Read(path, section, key);
-        if (!double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out double result)) {
-            throw new InvalidDataException($"Valor numerico invalido: [{section}] {key}.");
-        }
-        return result;
-    }
-
-    static IEnumerable<string> Split(string value) => value.Split(',')
-        .Select(item => item.Trim())
-        .Where(item => item.Length != 0);
-
-    static string Number(double value) =>
-        value.ToString("0.###", CultureInfo.InvariantCulture);
 }

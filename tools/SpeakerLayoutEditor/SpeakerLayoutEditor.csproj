@@ -10,4 +10,8 @@
     <Product>SpatialAudioLab Studio</Product>
     <Description>Configurable spatial speaker layout and routing studio</Description>
   </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SpatialAudioLab.Core\SpatialAudioLab.Core.csproj" />
+  </ItemGroup>
 </Project>

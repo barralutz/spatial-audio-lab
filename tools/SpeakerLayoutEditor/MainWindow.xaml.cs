@@ -1,41 +1,30 @@
 using Microsoft.Win32;
 using System.Collections.ObjectModel;
-using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
-using System.Security.Principal;
-using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using System.Windows.Threading;
+using SpeakerLayoutEditor.Services;
+using SpatialAudioLab.Core.Audio;
+using SpatialAudioLab.Core.Profiles;
+using SpatialAudioLab.Core.Runtime;
 using IOPath = System.IO.Path;
 
 namespace SpeakerLayoutEditor;
 
-public sealed record EndpointChoice(string Filter, string DisplayName);
-
-sealed record AudioEndpointInfo(string Name, string Id);
+public sealed record EndpointChoice(
+    string Filter,
+    string DisplayName,
+    AudioEndpointDescriptor? Descriptor);
 
 sealed record PhysicalDestinationChoice(OutputRouteDefinition Output,
                                         int ChannelIndex,
                                         string DisplayName);
-
-enum BridgeMode {
-    Mat,
-    NativeMat,
-    DtsX,
-    Pcm
-}
-
-enum BridgeLatencyMode {
-    Safe,
-    Balanced,
-    Low
-}
 
 public partial class MainWindow : Window {
     static readonly Color[] RouteColors = [
@@ -52,8 +41,13 @@ public partial class MainWindow : Window {
             ["TBL"] = (-135, 45), ["TBR"] = (135, 45)
         };
 
-    readonly string repoRoot;
-    readonly List<AudioEndpointInfo> activeEndpoints = [];
+    readonly RuntimePaths runtimePaths;
+    readonly ProfileRepository profileRepository;
+    readonly EndpointQuery endpointQuery;
+    readonly BridgeProcessService bridgeProcessService = new();
+    readonly ISpatialProviderService spatialProviderService =
+        new DeferredSpatialProviderService();
+    readonly List<AudioEndpointDescriptor> activeEndpoints = [];
     readonly ObservableCollection<PhysicalDestinationChoice> physicalDestinationChoices = [];
     readonly DispatcherTimer bridgeStatusTimer = new() {
         Interval = TimeSpan.FromSeconds(1)
@@ -79,9 +73,12 @@ public partial class MainWindow : Window {
     public ObservableCollection<EndpointChoice> EndpointChoices { get; } = [];
 
     public MainWindow() {
+        runtimePaths = RuntimePaths.ResolveForCurrentProcess();
+        runtimePaths.EnsureUserDirectories();
+        profileRepository = new ProfileRepository(runtimePaths.ProfilesRoot);
+        endpointQuery = new EndpointQuery(runtimePaths);
         InitializeComponent();
         PhysicalDestinationCombo.ItemsSource = physicalDestinationChoices;
-        repoRoot = FindRepoRoot();
         Loaded += WindowLoaded;
         Closed += (_, _) => {
             bridgeStatusTimer.Stop();
@@ -94,28 +91,38 @@ public partial class MainWindow : Window {
     }
 
     async void WindowLoaded(object sender, RoutedEventArgs e) {
-        LoadProfile(IOPath.Combine(repoRoot, "configs", "realtek-c1u-714.ini"));
+        ProfileDocument? activeProfile = profileRepository.LoadActive();
+        if (activeProfile is null) {
+            StatusText.Text = "Se requiere la configuracion inicial de parlantes";
+            PathText.Text = runtimePaths.ProfilesRoot;
+        } else {
+            LoadProfile(activeProfile);
+        }
         await RefreshEndpointsAsync();
         UpdateBridgeStatus();
         bridgeStatusTimer.Start();
         meterTimer.Start();
     }
 
-    static string FindRepoRoot() {
-        DirectoryInfo? directory = new(AppContext.BaseDirectory);
-        while (directory is not null) {
-            if (File.Exists(IOPath.Combine(directory.FullName, "CMakeLists.txt"))) {
-                return directory.FullName;
-            }
-            directory = directory.Parent;
-        }
-        throw new DirectoryNotFoundException("No se encontro la raiz de SpatialAudioLab.");
-    }
-
     void LoadProfile(string path) {
         try {
-            document = LayoutDocument.Load(path);
-            currentPath = IOPath.GetFullPath(path);
+            LayoutDocument imported = LayoutDocument.Load(path);
+            ProfileDocument profile = imported.ToProfile();
+            profileRepository.Save(profile);
+            profileRepository.SetActive(profile.Id);
+            LoadProfile(profile);
+        } catch (Exception error) {
+            MessageBox.Show(this, error.Message, "No se pudo abrir el perfil",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    void LoadProfile(ProfileDocument profile) {
+        try {
+            document = LayoutDocument.FromProfile(profile);
+            currentPath = IOPath.Combine(
+                runtimePaths.ProfilesRoot,
+                $"{profile.Id:D}.ini");
             SpeakerList.ItemsSource = document.Speakers;
             OutputGrid.ItemsSource = document.Outputs;
             LayoutNameText.Text = document.Name;
@@ -139,38 +146,8 @@ public partial class MainWindow : Window {
     async Task RefreshEndpointsAsync() {
         RefreshEndpointsButton.IsEnabled = false;
         try {
-            string executable = IOPath.Combine(repoRoot, "build", "SpatialAudioLab.CLI.exe");
-            if (!File.Exists(executable)) {
-                throw new FileNotFoundException("Ejecuta tools\\Build-DolbyProbe.ps1.", executable);
-            }
-            ProcessStartInfo start = new(executable) {
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                StandardOutputEncoding = Encoding.UTF8,
-                StandardErrorEncoding = Encoding.UTF8
-            };
-            start.ArgumentList.Add("list-endpoints");
-            using Process process = Process.Start(start) ??
-                throw new InvalidOperationException("No se pudo consultar los endpoints.");
-            Task<string> outputTask = process.StandardOutput.ReadToEndAsync();
-            Task<string> errorTask = process.StandardError.ReadToEndAsync();
-            await process.WaitForExitAsync();
-            string output = await outputTask;
-            string error = await errorTask;
-            if (process.ExitCode != 0) {
-                throw new InvalidOperationException(
-                    string.IsNullOrWhiteSpace(error) ? "Fallo la consulta de endpoints." : error.Trim());
-            }
-
             activeEndpoints.Clear();
-            foreach (string line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries)) {
-                string[] fields = line.TrimEnd('\r').Split('\t', 2);
-                if (fields.Length == 2 && fields[0].Length != 0 && fields[1].Length != 0) {
-                    activeEndpoints.Add(new AudioEndpointInfo(fields[0], fields[1]));
-                }
-            }
+            activeEndpoints.AddRange(await endpointQuery.QueryAsync());
             activeEndpoints.Sort((first, second) =>
                 StringComparer.CurrentCultureIgnoreCase.Compare(first.Name, second.Name));
             RebuildEndpointChoices();
@@ -193,24 +170,34 @@ public partial class MainWindow : Window {
                 .Select(group => group.Key)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-            foreach (AudioEndpointInfo endpoint in activeEndpoints) {
-                string? configuredFilter = document?.Outputs
-                    .Select(output => output.Endpoint)
-                    .FirstOrDefault(filter => EndpointMatchesExactlyOne(filter, endpoint));
-                string filter = configuredFilter ??
-                    (duplicateNames.Contains(endpoint.Name) ? endpoint.Id : endpoint.Name);
+            foreach (AudioEndpointDescriptor endpoint in activeEndpoints) {
                 string displayName = duplicateNames.Contains(endpoint.Name)
                     ? $"{endpoint.Name} [{ShortEndpointId(endpoint.Id)}]"
                     : endpoint.Name;
-                EndpointChoices.Add(new EndpointChoice(filter, displayName));
+                EndpointChoices.Add(new EndpointChoice(endpoint.Id, displayName, endpoint));
             }
 
             if (document is not null) {
                 foreach (OutputRouteDefinition output in document.Outputs) {
+                    EndpointMatchResult match = EndpointMatcher.Match(
+                        new EndpointIdentity(
+                            output.EndpointId,
+                            output.EndpointName,
+                            output.ContainerId,
+                            output.ExpectedChannels),
+                        activeEndpoints);
+                    if (match.Endpoint is not null) {
+                        AudioEndpointDescriptor endpoint = match.Endpoint;
+                        output.ConfigureEndpoint(
+                            endpoint.Id,
+                            endpoint.Name,
+                            endpoint.ContainerId,
+                            Math.Max(endpoint.MaximumChannels48k, output.Speakers.Count));
+                    }
                     if (EndpointChoices.Any(choice => choice.Filter.Equals(
                             output.Endpoint, StringComparison.OrdinalIgnoreCase))) continue;
                     EndpointChoices.Add(new EndpointChoice(
-                        output.Endpoint, $"{output.Endpoint} (no disponible)"));
+                        output.Endpoint, $"{output.EndpointName} (no disponible)", null));
                 }
             }
             OutputGrid.Items.Refresh();
@@ -222,9 +209,15 @@ public partial class MainWindow : Window {
     void EndpointSelectionChanged(object sender, SelectionChangedEventArgs e) {
         if (updatingEndpointChoices || sender is not ComboBox comboBox ||
             comboBox.DataContext is not OutputRouteDefinition output ||
-            comboBox.SelectedValue is not string filter) return;
-        if (output.Endpoint.Equals(filter, StringComparison.OrdinalIgnoreCase)) return;
-        output.Endpoint = filter;
+            comboBox.SelectedItem is not EndpointChoice choice ||
+            choice.Descriptor is null) return;
+        if (output.Endpoint.Equals(choice.Filter, StringComparison.OrdinalIgnoreCase)) return;
+        AudioEndpointDescriptor endpoint = choice.Descriptor;
+        output.ConfigureEndpoint(
+            endpoint.Id,
+            endpoint.Name,
+            endpoint.ContainerId,
+            Math.Max(endpoint.MaximumChannels48k, output.Speakers.Count));
         if (selectedSpeaker is not null &&
             ReferenceEquals(document?.OutputFor(selectedSpeaker.Name), output)) {
             DestinationEndpointText.Text = output.Endpoint;
@@ -244,15 +237,6 @@ public partial class MainWindow : Window {
         }
     }
 
-    bool EndpointMatchesExactlyOne(string filter, AudioEndpointInfo candidate) {
-        if (!EndpointMatches(candidate, filter)) return false;
-        return activeEndpoints.Count(endpoint => EndpointMatches(endpoint, filter)) == 1;
-    }
-
-    static bool EndpointMatches(AudioEndpointInfo endpoint, string filter) =>
-        endpoint.Name.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-        endpoint.Id.Contains(filter, StringComparison.OrdinalIgnoreCase);
-
     static string ShortEndpointId(string endpointId) {
         int closingBrace = endpointId.LastIndexOf('}');
         int start = Math.Max(0, closingBrace - 8);
@@ -262,7 +246,7 @@ public partial class MainWindow : Window {
     BridgeMode SelectedBridgeMode =>
         PcmModeButton.IsChecked == true ? BridgeMode.Pcm :
         NativeMatModeButton.IsChecked == true ? BridgeMode.NativeMat :
-        DtsXModeButton.IsChecked == true ? BridgeMode.DtsX : BridgeMode.Mat;
+        DtsXModeButton.IsChecked == true ? BridgeMode.DtsX : BridgeMode.Atmos;
 
     BridgeLatencyMode SelectedBridgeLatencyMode =>
         SafeLatencyButton.IsChecked == true ? BridgeLatencyMode.Safe :
@@ -270,42 +254,26 @@ public partial class MainWindow : Window {
         BridgeLatencyMode.Balanced;
 
     static string BridgeName(BridgeMode mode) => mode switch {
-        BridgeMode.Mat => "Dolby Atmos (Windows)",
+        BridgeMode.Atmos => "Dolby Atmos (Windows)",
         BridgeMode.NativeMat => "Dolby MAT nativo",
         BridgeMode.DtsX => "DTS:X",
         BridgeMode.Pcm => "PCM propio 7.1.4",
         _ => throw new ArgumentOutOfRangeException(nameof(mode))
     };
 
-    static string BridgeStartScript(BridgeMode mode) => mode switch {
-        BridgeMode.Mat => "Start-Live714.ps1",
-        BridgeMode.NativeMat => "Start-LiveNativeMat714.ps1",
-        BridgeMode.DtsX => "Start-LiveDtsX714.ps1",
-        BridgeMode.Pcm => "Start-LivePcm714.ps1",
-        _ => throw new ArgumentOutOfRangeException(nameof(mode))
-    };
-
-    static string BridgeStopScript(BridgeMode mode) => mode switch {
-        BridgeMode.Mat => "Stop-Live714.ps1",
-        BridgeMode.NativeMat => "Stop-LiveNativeMat714.ps1",
-        BridgeMode.DtsX => "Stop-LiveDtsX714.ps1",
-        BridgeMode.Pcm => "Stop-LivePcm714.ps1",
-        _ => throw new ArgumentOutOfRangeException(nameof(mode))
-    };
-
-    string BridgePidPath(BridgeMode mode) => IOPath.Combine(repoRoot, "captures", mode switch {
-        BridgeMode.Mat => "live-714.pid",
-        BridgeMode.NativeMat => "live-native-mat-714.pid",
-        BridgeMode.DtsX => "live-dtsx-714.pid",
-        BridgeMode.Pcm => "live-pcm-714.pid",
+    string BridgePidPath(BridgeMode mode) => IOPath.Combine(runtimePaths.LogsRoot, mode switch {
+        BridgeMode.Atmos => "bridge-atmos.pid",
+        BridgeMode.NativeMat => "bridge-native-mat.pid",
+        BridgeMode.DtsX => "bridge-dtsx.pid",
+        BridgeMode.Pcm => "bridge-pcm.pid",
         _ => throw new ArgumentOutOfRangeException(nameof(mode))
     });
 
-    string BridgeLogPath(BridgeMode mode) => IOPath.Combine(repoRoot, "captures", mode switch {
-        BridgeMode.Mat => "live-714.log",
-        BridgeMode.NativeMat => "live-native-mat-714.log",
-        BridgeMode.DtsX => "live-dtsx-714.log",
-        BridgeMode.Pcm => "live-pcm-714.log",
+    string BridgeLogPath(BridgeMode mode) => IOPath.Combine(runtimePaths.LogsRoot, mode switch {
+        BridgeMode.Atmos => "bridge-atmos.log",
+        BridgeMode.NativeMat => "bridge-native-mat.log",
+        BridgeMode.DtsX => "bridge-dtsx.log",
+        BridgeMode.Pcm => "bridge-pcm.log",
         _ => throw new ArgumentOutOfRangeException(nameof(mode))
     });
 
@@ -335,7 +303,7 @@ public partial class MainWindow : Window {
     }
 
     void SelectBridgeMode(BridgeMode mode) {
-        MatModeButton.IsChecked = mode == BridgeMode.Mat;
+        MatModeButton.IsChecked = mode == BridgeMode.Atmos;
         NativeMatModeButton.IsChecked = mode == BridgeMode.NativeMat;
         DtsXModeButton.IsChecked = mode == BridgeMode.DtsX;
         PcmModeButton.IsChecked = mode == BridgeMode.Pcm;
@@ -427,164 +395,57 @@ public partial class MainWindow : Window {
         if (!SaveProfile(currentPath)) return;
 
         BridgeMode mode = SelectedBridgeMode;
-        string[] arguments = [
-            "-Gain", BridgeGainSlider.Value.ToString("0.###", CultureInfo.InvariantCulture),
-            "-PrebufferMilliseconds",
-            ((int)Math.Round(BridgePrebufferSlider.Value)).ToString(CultureInfo.InvariantCulture),
-            "-LatencyMode", SelectedBridgeLatencyMode.ToString(),
-            "-Layout", currentPath
-        ];
-        await RunBridgeCommandAsync(
-            BridgeStartScript(mode), arguments, mode, switching ? "cambiar" : "iniciar");
-    }
-
-    async void StopBridgeClick(object sender, RoutedEventArgs e) {
-        List<BridgeMode> runningModes = RunningBridgeModes();
-        foreach (BridgeMode mode in runningModes) {
-            await RunBridgeCommandAsync(BridgeStopScript(mode), [], mode, "detener");
-        }
-    }
-
-    async Task RunBridgeCommandAsync(string scriptName,
-                                     string[] arguments,
-                                     BridgeMode mode,
-                                     string operation) {
         string bridgeName = BridgeName(mode);
         bridgeCommandRunning = true;
         BridgeStartButton.IsEnabled = false;
         BridgeStopButton.IsEnabled = false;
-        BridgeStatusText.Text = operation switch {
-            "iniciar" => $"Iniciando {bridgeName}...",
-            "cambiar" => $"Cambiando a {bridgeName}...",
-            _ => $"Deteniendo {bridgeName}..."
-        };
+        BridgeStatusText.Text = switching
+            ? $"Cambiando a {bridgeName}..."
+            : $"Iniciando {bridgeName}...";
         try {
-            ScriptResult result = await RunPowerShellScriptAsync(
-                IOPath.Combine(repoRoot, "tools", scriptName), arguments);
-            if (result.ExitCode != 0) {
-                string detail = string.IsNullOrWhiteSpace(result.Error)
-                    ? result.Output.Trim()
-                    : result.Error.Trim();
-                throw new InvalidOperationException(string.IsNullOrWhiteSpace(detail)
-                    ? $"No se pudo {operation} {bridgeName} (codigo {result.ExitCode})."
-                    : detail);
+            foreach (BridgeMode runningMode in RunningBridgeModes()) {
+                await bridgeProcessService.StopAsync(BridgePidPath(runningMode));
             }
-            await Task.Delay(350);
-            UpdateBridgeStatus();
-            StatusText.Text = operation switch {
-                "iniciar" => $"{bridgeName} iniciado",
-                "cambiar" => $"Puente cambiado a {bridgeName}",
-                _ => $"{bridgeName} detenido"
-            };
-        } catch (Win32Exception error) when (error.NativeErrorCode == 1223) {
-            StatusText.Text = $"Operacion {bridgeName} cancelada";
+            await spatialProviderService.ActivateAsync(mode);
+            BridgeCommand command = BridgeCommandFactory.Create(
+                runtimePaths,
+                mode,
+                currentPath,
+                BridgeGainSlider.Value,
+                (int)Math.Round(BridgePrebufferSlider.Value),
+                SelectedBridgeLatencyMode);
+            await bridgeProcessService.StartAsync(command);
+            StatusText.Text = switching
+                ? $"Puente cambiado a {bridgeName}"
+                : $"{bridgeName} iniciado";
         } catch (Exception error) {
-            MessageBox.Show(this, error.Message, $"No se pudo {operation} {bridgeName}",
+            MessageBox.Show(this, error.Message, $"No se pudo iniciar {bridgeName}",
                 MessageBoxButton.OK, MessageBoxImage.Error);
-            StatusText.Text = $"Error al {operation} {bridgeName}";
+            StatusText.Text = $"Error al iniciar {bridgeName}";
         } finally {
             bridgeCommandRunning = false;
             UpdateBridgeStatus();
         }
     }
 
-    sealed record ScriptResult(int ExitCode, string Output, string Error);
-
-    async Task<ScriptResult> RunPowerShellScriptAsync(string scriptPath, string[] arguments) {
-        if (!IsElevated()) {
-            return await RunElevatedPowerShellScriptAsync(scriptPath, arguments);
-        }
-
-        ProcessStartInfo start = new("powershell.exe") {
-            UseShellExecute = false,
-            WorkingDirectory = repoRoot,
-            WindowStyle = ProcessWindowStyle.Hidden,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8
-        };
-        start.ArgumentList.Add("-NoProfile");
-        start.ArgumentList.Add("-ExecutionPolicy");
-        start.ArgumentList.Add("Bypass");
-        start.ArgumentList.Add("-File");
-        start.ArgumentList.Add(scriptPath);
-        foreach (string argument in arguments) start.ArgumentList.Add(argument);
-
-        using Process process = Process.Start(start) ??
-            throw new InvalidOperationException("No se pudo iniciar PowerShell.");
-        Task<string> outputTask = process.StandardOutput.ReadToEndAsync();
-        Task<string> errorTask = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
-        return new ScriptResult(process.ExitCode, await outputTask, await errorTask);
-    }
-
-    async Task<ScriptResult> RunElevatedPowerShellScriptAsync(
-            string scriptPath, string[] arguments) {
-        string temporaryBase = IOPath.Combine(
-            IOPath.GetTempPath(), $"SpatialAudioLab-{Guid.NewGuid():N}");
-        string wrapperPath = temporaryBase + ".ps1";
-        string outputPath = temporaryBase + ".log";
+    async void StopBridgeClick(object sender, RoutedEventArgs e) {
+        bridgeCommandRunning = true;
+        BridgeStartButton.IsEnabled = false;
+        BridgeStopButton.IsEnabled = false;
+        BridgeStatusText.Text = "Deteniendo puente...";
         try {
-            StringBuilder command = new("& ");
-            command.Append(PowerShellLiteral(scriptPath));
-            foreach (string argument in arguments) {
-                command.Append(' ');
-                command.Append(IsPowerShellParameter(argument)
-                    ? argument
-                    : PowerShellLiteral(argument));
+            foreach (BridgeMode mode in RunningBridgeModes()) {
+                await bridgeProcessService.StopAsync(BridgePidPath(mode));
             }
-            string wrapper = $$"""
-                $ErrorActionPreference = 'Stop'
-                try {
-                    {{command}} *>&1 | Out-File -LiteralPath {{PowerShellLiteral(outputPath)}} -Encoding utf8
-                    $code = if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE }
-                    exit $code
-                } catch {
-                    $_ | Out-String | Out-File -LiteralPath {{PowerShellLiteral(outputPath)}} -Append -Encoding utf8
-                    exit 1
-                }
-                """;
-            File.WriteAllText(wrapperPath, wrapper, Encoding.Unicode);
-
-            ProcessStartInfo start = new("powershell.exe") {
-                UseShellExecute = true,
-                Verb = "runas",
-                WorkingDirectory = repoRoot,
-                WindowStyle = ProcessWindowStyle.Hidden
-            };
-            start.ArgumentList.Add("-NoProfile");
-            start.ArgumentList.Add("-ExecutionPolicy");
-            start.ArgumentList.Add("Bypass");
-            start.ArgumentList.Add("-File");
-            start.ArgumentList.Add(wrapperPath);
-
-            using Process process = Process.Start(start) ??
-                throw new InvalidOperationException("No se pudo iniciar PowerShell como administrador.");
-            await process.WaitForExitAsync();
-            string output = File.Exists(outputPath)
-                ? await File.ReadAllTextAsync(outputPath)
-                : "";
-            return new ScriptResult(process.ExitCode, output, "");
+            StatusText.Text = "Puente detenido";
+        } catch (Exception error) {
+            MessageBox.Show(this, error.Message, "No se pudo detener el puente",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+            StatusText.Text = "Error al detener el puente";
         } finally {
-            try { File.Delete(wrapperPath); } catch (IOException) { }
-            try { File.Delete(outputPath); } catch (IOException) { }
+            bridgeCommandRunning = false;
+            UpdateBridgeStatus();
         }
-    }
-
-    static bool IsPowerShellParameter(string value) =>
-        value.Length > 1 && value[0] == '-' &&
-        value[1..].All(character => char.IsLetterOrDigit(character) ||
-                                     character is '-' or '_');
-
-    static string PowerShellLiteral(string value) =>
-        $"'{value.Replace("'", "''", StringComparison.Ordinal)}'";
-
-    static bool IsElevated() {
-        using WindowsIdentity identity = WindowsIdentity.GetCurrent();
-        return new WindowsPrincipal(identity).IsInRole(
-            WindowsBuiltInRole.Administrator);
     }
 
     void OpenBridgeLogClick(object sender, RoutedEventArgs e) {
@@ -659,7 +520,7 @@ public partial class MainWindow : Window {
     void OpenClick(object sender, RoutedEventArgs e) {
         OpenFileDialog dialog = new() {
             Filter = "Perfil de parlantes (*.ini)|*.ini|Todos los archivos (*.*)|*.*",
-            InitialDirectory = IOPath.Combine(repoRoot, "configs")
+            InitialDirectory = runtimePaths.ProfilesRoot
         };
         if (dialog.ShowDialog(this) == true) LoadProfile(dialog.FileName);
     }
@@ -675,7 +536,7 @@ public partial class MainWindow : Window {
     void SaveAsClick(object sender, RoutedEventArgs e) {
         SaveFileDialog dialog = new() {
             Filter = "Perfil de parlantes (*.ini)|*.ini",
-            InitialDirectory = IOPath.Combine(repoRoot, "configs"),
+            InitialDirectory = runtimePaths.ProfilesRoot,
             FileName = currentPath is null ? "speaker-layout.ini" : IOPath.GetFileName(currentPath)
         };
         if (dialog.ShowDialog(this) == true) SaveProfile(dialog.FileName);
@@ -684,10 +545,21 @@ public partial class MainWindow : Window {
     bool SaveProfile(string path) {
         if (document is null) return false;
         try {
-            document.Save(path);
-            currentPath = IOPath.GetFullPath(path);
+            ProfileDocument profile = document.ToProfile();
+            profileRepository.Save(profile);
+            profileRepository.SetActive(profile.Id);
+            string canonicalPath = IOPath.Combine(
+                runtimePaths.ProfilesRoot,
+                $"{profile.Id:D}.ini");
+            string requestedPath = IOPath.GetFullPath(path);
+            if (!requestedPath.Equals(canonicalPath, StringComparison.OrdinalIgnoreCase)) {
+                ProfileIniSerializer.Save(requestedPath, profile);
+            }
+            currentPath = canonicalPath;
             PathText.Text = currentPath;
-            StatusText.Text = "Perfil guardado";
+            StatusText.Text = requestedPath.Equals(canonicalPath, StringComparison.OrdinalIgnoreCase)
+                ? "Perfil guardado"
+                : $"Perfil guardado y exportado a {requestedPath}";
             return true;
         } catch (Exception error) {
             MessageBox.Show(this, error.Message, "No se pudo guardar el perfil",
@@ -784,9 +656,9 @@ public partial class MainWindow : Window {
     async void TestSpeakerClick(object sender, RoutedEventArgs e) {
         if (document is null || selectedSpeaker is null || currentPath is null) return;
         if (!SaveProfile(currentPath)) return;
-        string executable = IOPath.Combine(repoRoot, "build", "SpatialAudioLab.CLI.exe");
+        string executable = runtimePaths.EngineExecutable;
         if (!File.Exists(executable)) {
-            MessageBox.Show(this, "Ejecuta tools\\Build-DolbyProbe.ps1.",
+            MessageBox.Show(this, $"No se encontro el Engine en:\n{executable}",
                 "Falta SpatialAudioLab.CLI.exe", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
