@@ -3,6 +3,7 @@
 /generated/
 /.vs/
 /overlays/
+/.worktrees/
 /patches/**/000*.patch
 
 *.obj
