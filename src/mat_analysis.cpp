@@ -248,6 +248,34 @@ struct PcmWindowMatch {
     double score{};
 };
 
+struct PcmLevelAccumulator {
+    long double squareSum{};
+    long double sum{};
+    double peak{};
+    std::uint64_t samples{};
+    std::size_t activeBlocks{};
+};
+
+void AccumulatePcmLevel(PcmLevelAccumulator& level, const BYTE* source,
+                        const std::size_t frames, const bool bigEndian) {
+    long double blockSquareSum = 0.0;
+    for (std::size_t frame = 0; frame < frames; ++frame) {
+        const BYTE* sample = source + frame * sizeof(std::int16_t);
+        const std::uint16_t bits = bigEndian
+                                       ? static_cast<std::uint16_t>((sample[0] << 8) | sample[1])
+                                       : ReadLittleUint16(sample);
+        const double normalized =
+            static_cast<double>(static_cast<std::int16_t>(bits)) / 32768.0;
+        level.sum += normalized;
+        level.squareSum += normalized * normalized;
+        blockSquareSum += normalized * normalized;
+        level.peak = std::max(level.peak, std::abs(normalized));
+        ++level.samples;
+    }
+    const double blockRms = std::sqrt(static_cast<double>(blockSquareSum / frames));
+    if (blockRms >= 0.001) ++level.activeBlocks;
+}
+
 PcmWindowMatch FindPcmToneWindow(const BYTE* payload, const std::size_t payloadBytes,
                                  const double frequency, const bool bigEndian,
                                  const std::size_t pcmFrames = 480,
@@ -424,6 +452,102 @@ void AnalyzeMatWave(const std::filesystem::path& inputPath) {
     std::wcout << L"Valid EMDF syncs at any bit alignment: " << emdfOffsets.size();
     for (const std::size_t offset : emdfOffsets) std::wcout << L" " << offset;
     std::wcout << L"\n";
+
+    std::map<std::size_t, std::size_t> markerCountHistogram;
+    for (std::size_t burst = 0; burst < preambles.size(); ++burst) {
+        const std::size_t payloadOffset = preambles[burst] + 8;
+        const std::size_t payloadBytes = burst + 1 < preambles.size()
+                                             ? preambles[burst + 1] - payloadOffset
+                                             : dataBytes - payloadOffset;
+        const auto logical = UnswapMatTransportWords(data + payloadOffset, payloadBytes);
+        ++markerCountHistogram[FindBytePattern(logical, fullBandMarker).size()];
+    }
+    const auto commonMarkerCount = std::max_element(
+        markerCountHistogram.begin(), markerCountHistogram.end(),
+        [](const auto& left, const auto& right) { return left.second < right.second; });
+    if (commonMarkerCount != markerCountHistogram.end() &&
+        commonMarkerCount->first >= 2 && commonMarkerCount->first % 2 == 0) {
+        const std::size_t slotsPerHalf = commonMarkerCount->first / 2;
+        std::vector<PcmLevelAccumulator> slotLevels(slotsPerHalf);
+        std::array<std::vector<PcmLevelAccumulator>, 2> halfSlotLevels = {
+            std::vector<PcmLevelAccumulator>(slotsPerHalf),
+            std::vector<PcmLevelAccumulator>(slotsPerHalf)};
+        PcmLevelAccumulator lfeLevel;
+        std::array<PcmLevelAccumulator, 2> halfLfeLevels{};
+        std::size_t analyzedBursts = 0;
+        for (std::size_t burst = 0; burst < preambles.size(); ++burst) {
+            const std::size_t payloadOffset = preambles[burst] + 8;
+            const std::size_t payloadBytes = burst + 1 < preambles.size()
+                                                 ? preambles[burst + 1] - payloadOffset
+                                                 : dataBytes - payloadOffset;
+            const auto logical = UnswapMatTransportWords(
+                data + payloadOffset, payloadBytes);
+            const auto markers = FindBytePattern(logical, fullBandMarker);
+            const auto lfe = FindBytePattern(logical, lfeMarker);
+            if (markers.size() != slotsPerHalf * 2 || lfe.size() != 2) continue;
+            bool valid = true;
+            for (const std::size_t marker : markers) {
+                valid = valid && marker + fullBandMarker.size() + 960 <= logical.size();
+            }
+            for (const std::size_t marker : lfe) {
+                valid = valid && marker + lfeMarker.size() + 240 <= logical.size();
+            }
+            if (!valid) continue;
+            for (std::size_t half = 0; half < 2; ++half) {
+                for (std::size_t slot = 0; slot < slotsPerHalf; ++slot) {
+                    const BYTE* source = logical.data() +
+                        markers[half * slotsPerHalf + slot] + fullBandMarker.size();
+                    AccumulatePcmLevel(slotLevels[slot], source, 480, true);
+                    AccumulatePcmLevel(halfSlotLevels[half][slot], source, 480, true);
+                }
+                const BYTE* source = logical.data() + lfe[half] + lfeMarker.size();
+                AccumulatePcmLevel(lfeLevel, source, 120, true);
+                AccumulatePcmLevel(halfLfeLevels[half], source, 120, true);
+            }
+            ++analyzedBursts;
+        }
+        std::wcout << L"PCM slot levels across " << analyzedBursts << L" bursts ("
+                   << slotsPerHalf << L" full-band slots per half):\n";
+        for (std::size_t slot = 0; slot < slotLevels.size(); ++slot) {
+            const PcmLevelAccumulator& level = slotLevels[slot];
+            const double rms = level.samples == 0 ? 0.0 :
+                std::sqrt(static_cast<double>(level.squareSum / level.samples));
+            const double mean = level.samples == 0 ? 0.0 :
+                static_cast<double>(level.sum / level.samples);
+            const auto halfRms = [&](const std::size_t half) {
+                const PcmLevelAccumulator& halfLevel = halfSlotLevels[half][slot];
+                return halfLevel.samples == 0 ? 0.0 : std::sqrt(static_cast<double>(
+                    halfLevel.squareSum / halfLevel.samples));
+            };
+            std::wcout << L"  slot " << std::setw(2) << slot << L": RMS "
+                       << std::fixed << std::setprecision(2) << std::setw(7)
+                       << Decibels(rms) << L", peak " << std::setw(7)
+                       << Decibels(level.peak) << L", DC " << std::setw(7)
+                       << Decibels(std::abs(mean)) << L", active blocks "
+                       << level.activeBlocks << L", halves "
+                       << halfSlotLevels[0][slot].activeBlocks << L"/"
+                       << halfSlotLevels[1][slot].activeBlocks << L" @ "
+                       << Decibels(halfRms(0)) << L"/" << Decibels(halfRms(1))
+                       << L" dBFS\n";
+        }
+        const double lfeRms = lfeLevel.samples == 0 ? 0.0 :
+            std::sqrt(static_cast<double>(lfeLevel.squareSum / lfeLevel.samples));
+        const double lfeMean = lfeLevel.samples == 0 ? 0.0 :
+            static_cast<double>(lfeLevel.sum / lfeLevel.samples);
+        const auto lfeHalfRms = [&](const std::size_t half) {
+            const PcmLevelAccumulator& level = halfLfeLevels[half];
+            return level.samples == 0 ? 0.0 : std::sqrt(static_cast<double>(
+                level.squareSum / level.samples));
+        };
+        std::wcout << L"  LFE    : RMS " << std::setw(7) << Decibels(lfeRms)
+                   << L", peak " << std::setw(7) << Decibels(lfeLevel.peak)
+                   << L", DC " << std::setw(7) << Decibels(std::abs(lfeMean))
+                   << L", active blocks " << lfeLevel.activeBlocks << L", halves "
+                   << halfLfeLevels[0].activeBlocks << L"/"
+                   << halfLfeLevels[1].activeBlocks << L" @ "
+                   << Decibels(lfeHalfRms(0)) << L"/" << Decibels(lfeHalfRms(1))
+                   << L" dBFS\n";
+    }
     if (fullBandMarkers.size() >= 31) {
         std::wcout << L"Active first-half PCM slots (RMS above -60 dBFS):\n";
         bool foundActiveSlot = false;

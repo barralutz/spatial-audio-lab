@@ -26,6 +26,7 @@ sealed record PhysicalDestinationChoice(OutputRouteDefinition Output,
 
 enum BridgeMode {
     Mat,
+    NativeMat,
     DtsX,
     Pcm
 }
@@ -260,6 +261,7 @@ public partial class MainWindow : Window {
 
     BridgeMode SelectedBridgeMode =>
         PcmModeButton.IsChecked == true ? BridgeMode.Pcm :
+        NativeMatModeButton.IsChecked == true ? BridgeMode.NativeMat :
         DtsXModeButton.IsChecked == true ? BridgeMode.DtsX : BridgeMode.Mat;
 
     BridgeLatencyMode SelectedBridgeLatencyMode =>
@@ -268,7 +270,8 @@ public partial class MainWindow : Window {
         BridgeLatencyMode.Balanced;
 
     static string BridgeName(BridgeMode mode) => mode switch {
-        BridgeMode.Mat => "Dolby MAT",
+        BridgeMode.Mat => "Dolby Atmos (Windows)",
+        BridgeMode.NativeMat => "Dolby MAT nativo",
         BridgeMode.DtsX => "DTS:X",
         BridgeMode.Pcm => "PCM propio 7.1.4",
         _ => throw new ArgumentOutOfRangeException(nameof(mode))
@@ -276,6 +279,7 @@ public partial class MainWindow : Window {
 
     static string BridgeStartScript(BridgeMode mode) => mode switch {
         BridgeMode.Mat => "Start-Live714.ps1",
+        BridgeMode.NativeMat => "Start-LiveNativeMat714.ps1",
         BridgeMode.DtsX => "Start-LiveDtsX714.ps1",
         BridgeMode.Pcm => "Start-LivePcm714.ps1",
         _ => throw new ArgumentOutOfRangeException(nameof(mode))
@@ -283,6 +287,7 @@ public partial class MainWindow : Window {
 
     static string BridgeStopScript(BridgeMode mode) => mode switch {
         BridgeMode.Mat => "Stop-Live714.ps1",
+        BridgeMode.NativeMat => "Stop-LiveNativeMat714.ps1",
         BridgeMode.DtsX => "Stop-LiveDtsX714.ps1",
         BridgeMode.Pcm => "Stop-LivePcm714.ps1",
         _ => throw new ArgumentOutOfRangeException(nameof(mode))
@@ -290,6 +295,7 @@ public partial class MainWindow : Window {
 
     string BridgePidPath(BridgeMode mode) => IOPath.Combine(repoRoot, "captures", mode switch {
         BridgeMode.Mat => "live-714.pid",
+        BridgeMode.NativeMat => "live-native-mat-714.pid",
         BridgeMode.DtsX => "live-dtsx-714.pid",
         BridgeMode.Pcm => "live-pcm-714.pid",
         _ => throw new ArgumentOutOfRangeException(nameof(mode))
@@ -297,6 +303,7 @@ public partial class MainWindow : Window {
 
     string BridgeLogPath(BridgeMode mode) => IOPath.Combine(repoRoot, "captures", mode switch {
         BridgeMode.Mat => "live-714.log",
+        BridgeMode.NativeMat => "live-native-mat-714.log",
         BridgeMode.DtsX => "live-dtsx-714.log",
         BridgeMode.Pcm => "live-pcm-714.log",
         _ => throw new ArgumentOutOfRangeException(nameof(mode))
@@ -329,6 +336,7 @@ public partial class MainWindow : Window {
 
     void SelectBridgeMode(BridgeMode mode) {
         MatModeButton.IsChecked = mode == BridgeMode.Mat;
+        NativeMatModeButton.IsChecked = mode == BridgeMode.NativeMat;
         DtsXModeButton.IsChecked = mode == BridgeMode.DtsX;
         PcmModeButton.IsChecked = mode == BridgeMode.Pcm;
     }
@@ -402,6 +410,7 @@ public partial class MainWindow : Window {
                 : selectedModeRunning ? "Activo" : "Cambiar";
         }
         MatModeButton.IsEnabled = !bridgeCommandRunning;
+        NativeMatModeButton.IsEnabled = !bridgeCommandRunning;
         DtsXModeButton.IsEnabled = !bridgeCommandRunning;
         PcmModeButton.IsEnabled = !bridgeCommandRunning;
         BridgeGainSlider.IsEnabled = !anyRunning && !bridgeCommandRunning;

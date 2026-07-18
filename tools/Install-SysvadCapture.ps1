@@ -14,7 +14,7 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $buildRoot = Join-Path $repoRoot `
-    "driver\windows-driver-samples\audio\sysvad\Package\x64\$Configuration"
+    "driver\windows-driver-samples\audio\sysvad\x64\$Configuration"
 $package = Join-Path $buildRoot 'package'
 $certificatePath = Join-Path $buildRoot 'package.cer'
 $devcon = Join-Path ${env:ProgramFiles(x86)} `

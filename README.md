@@ -115,9 +115,12 @@ example, not a portable hardware preset. Copy it, select your own render endpoin
 **Outputs** tab, assign logical speakers to physical channels, test each speaker at low gain, and
 save the resulting profile before starting a live bridge.
 
-Studio can switch among three router modes:
+Studio can switch among four router modes:
 
-- **Dolby MAT** for a Windows Dolby Atmos for Home Theater stream.
+- **Atmos (Windows)** for a Windows Dolby Atmos for Home Theater stream.
+- **MAT nativo** for applications such as Battlefield 1 that open a legacy Dolby MLP/MAT 1.0
+  carrier directly. Start this bridge before the application; the router automatically reopens
+  physical WASAPI outputs if exclusive-stream negotiation invalidates them.
 - **DTS:X** for a Windows DTS:X for Home Theater stream.
 - **PCM 7.1.4** for a native static spatial bed and for Cinema playback.
 

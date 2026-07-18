@@ -39,6 +39,8 @@ constexpr double kPi = 3.14159265358979323846;
 constexpr double kClockUpdateSeconds = 0.5;
 constexpr double kControllerRecoveryFrames = kSampleRate * 20.0;
 constexpr double kMaximumRateAdjustment = 0.002;
+constexpr unsigned kEndpointRecoveryAttempts = 50;
+constexpr DWORD kEndpointRecoveryDelayMilliseconds = 100;
 
 class MmcssRegistration {
 public:
@@ -387,6 +389,70 @@ struct MultiEndpointRenderer::Impl {
         }
     }
 
+    void LogRouteFailure(const RenderStream& stream,
+                         const wchar_t* operation,
+                         const HRESULT result) const {
+        std::wcerr << L"Renderer route '" << stream.routeName << L"' ("
+                   << stream.endpointName << L"): " << operation << L" failed ("
+                   << HResultText(result) << L")\n";
+    }
+
+    void StopStreams(const bool drain) {
+        if (started && drain) {
+            UINT32 maximumBuffer = 0;
+            for (const RenderStream& stream : streams) {
+                maximumBuffer = std::max(maximumBuffer, stream.bufferFrames);
+            }
+            Sleep(static_cast<DWORD>(
+                std::ceil(maximumBuffer * 1000.0 / kSampleRate)) + 20);
+        }
+        for (RenderStream& stream : streams) {
+            if (started) {
+                UINT64 position = 0;
+                const HRESULT clockResult = stream.clock->GetPosition(&position, nullptr);
+                if (SUCCEEDED(clockResult)) {
+                    stream.endClockPosition = position;
+                } else {
+                    LogRouteFailure(stream, L"read end clock", clockResult);
+                }
+            }
+            if (stream.running) {
+                const HRESULT stopResult = stream.client->Stop();
+                if (FAILED(stopResult)) LogRouteFailure(stream, L"stop stream", stopResult);
+            }
+            stream.running = false;
+        }
+        started = false;
+    }
+
+    std::vector<double> SourcePositions() const {
+        std::vector<double> positions;
+        positions.reserve(streams.size());
+        for (const RenderStream& stream : streams) positions.push_back(stream.sourcePosition);
+        return positions;
+    }
+
+    void ReopenStreams(const std::vector<double>& sourcePositions) {
+        StopStreams(false);
+
+        std::vector<RenderStream> replacements;
+        replacements.reserve(layout.outputs.size());
+        for (std::size_t index = 0; index < layout.outputs.size(); ++index) {
+            RenderStream stream = OpenRenderStream(layout, layout.outputs[index], latencyMode);
+            if (index < sourcePositions.size()) stream.sourcePosition = sourcePositions[index];
+            replacements.push_back(std::move(stream));
+        }
+
+        std::vector<HANDLE> replacementEvents;
+        replacementEvents.reserve(replacements.size());
+        for (const RenderStream& stream : replacements) {
+            replacementEvents.push_back(stream.event.Get());
+        }
+        streams.swap(replacements);
+        events.swap(replacementEvents);
+        stopped = false;
+    }
+
     void UpdateSynchronization(const bool sourceIsActive) {
         const auto now = std::chrono::steady_clock::now();
         if (now < nextClockUpdate) return;
@@ -471,24 +537,73 @@ void MultiEndpointRenderer::Start() {
     }
 }
 
+void MultiEndpointRenderer::RecoverPhysicalOutputs(
+    const InterleavedPcmQueue& queue,
+    const HRESULT failure,
+    const std::vector<double>& sourcePositions,
+    const std::wstring_view stage) {
+    std::wcerr << L"WASAPI invalidated a physical output during " << stage << L" ("
+               << HResultText(failure) << L"); reopening the configured routes.\n";
+    for (unsigned attempt = 1; attempt <= kEndpointRecoveryAttempts; ++attempt) {
+        try {
+            impl_->ReopenStreams(sourcePositions);
+            Prime(queue);
+            Start();
+            std::wcerr << L"Physical output recovery completed on attempt "
+                       << attempt << L".\n";
+            return;
+        } catch (const AudioClientError& recoveryError) {
+            if (!IsRecoverableAudioClientError(recoveryError.Result()) ||
+                attempt == kEndpointRecoveryAttempts) {
+                throw;
+            }
+            std::wcerr << L"Physical output recovery attempt " << attempt
+                       << L" failed (" << HResultText(recoveryError.Result())
+                       << L"); retrying.\n";
+        } catch (const std::exception& recoveryError) {
+            if (attempt == kEndpointRecoveryAttempts) throw;
+            std::wcerr << L"Physical output recovery attempt " << attempt
+                       << L" failed (" << recoveryError.what() << L"); retrying.\n";
+        }
+        Sleep(kEndpointRecoveryDelayMilliseconds);
+    }
+}
+
+void MultiEndpointRenderer::PrimeAndStart(const InterleavedPcmQueue& queue) {
+    const std::vector<double> sourcePositions = impl_->SourcePositions();
+    try {
+        Prime(queue);
+        Start();
+    } catch (const AudioClientError& error) {
+        if (!IsRecoverableAudioClientError(error.Result())) throw;
+        RecoverPhysicalOutputs(queue, error.Result(), sourcePositions, L"renderer startup");
+    }
+}
+
 void MultiEndpointRenderer::Service(const InterleavedPcmQueue& queue,
                                     const bool countStarvation,
                                     const DWORD timeoutMilliseconds) {
     if (!impl_->started) throw std::runtime_error("Renderer must be started before servicing");
-    const DWORD count = static_cast<DWORD>(impl_->events.size());
-    const DWORD wait = WaitForMultipleObjects(
-        count, impl_->events.data(), FALSE, timeoutMilliseconds);
-    if (wait >= WAIT_OBJECT_0 && wait < WAIT_OBJECT_0 + count) {
-        FillStream(impl_->streams[wait - WAIT_OBJECT_0], queue, impl_->gain, countStarvation);
-    } else if (wait != WAIT_TIMEOUT) {
-        throw std::runtime_error("Multi-endpoint render event failed");
+    try {
+        const DWORD count = static_cast<DWORD>(impl_->events.size());
+        const DWORD wait = WaitForMultipleObjects(
+            count, impl_->events.data(), FALSE, timeoutMilliseconds);
+        if (wait >= WAIT_OBJECT_0 && wait < WAIT_OBJECT_0 + count) {
+            FillStream(impl_->streams[wait - WAIT_OBJECT_0], queue, impl_->gain, countStarvation);
+        } else if (wait != WAIT_TIMEOUT) {
+            throw std::runtime_error("Multi-endpoint render event failed");
+        }
+        for (std::size_t poll = 0; poll < impl_->events.size(); ++poll) {
+            const DWORD ready = WaitForMultipleObjects(count, impl_->events.data(), FALSE, 0);
+            if (ready < WAIT_OBJECT_0 || ready >= WAIT_OBJECT_0 + count) break;
+            FillStream(impl_->streams[ready - WAIT_OBJECT_0], queue, impl_->gain, countStarvation);
+        }
+        impl_->UpdateSynchronization(countStarvation);
+    } catch (const AudioClientError& error) {
+        if (!IsRecoverableAudioClientError(error.Result())) throw;
+        const std::vector<double> sourcePositions = impl_->SourcePositions();
+        RecoverPhysicalOutputs(queue, error.Result(), sourcePositions, L"rendering");
     }
-    for (std::size_t poll = 0; poll < impl_->events.size(); ++poll) {
-        const DWORD ready = WaitForMultipleObjects(count, impl_->events.data(), FALSE, 0);
-        if (ready < WAIT_OBJECT_0 || ready >= WAIT_OBJECT_0 + count) break;
-        FillStream(impl_->streams[ready - WAIT_OBJECT_0], queue, impl_->gain, countStarvation);
-    }
-    impl_->UpdateSynchronization(countStarvation);
 }
 
 void MultiEndpointRenderer::DiscardConsumed(InterleavedPcmQueue& queue) const {
@@ -528,18 +643,7 @@ bool MultiEndpointRenderer::IsStarted() const {
 
 void MultiEndpointRenderer::Stop() {
     if (!impl_ || impl_->stopped) return;
-    if (impl_->started) {
-        const UINT32 maximumBuffer = MaximumBufferFrames();
-        Sleep(static_cast<DWORD>(std::ceil(maximumBuffer * 1000.0 / kSampleRate)) + 20);
-        for (RenderStream& stream : impl_->streams) {
-            ThrowIfFailed(stream.clock->GetPosition(&stream.endClockPosition, nullptr),
-                          "Read render end clock");
-        }
-        for (RenderStream& stream : impl_->streams) {
-            if (stream.running) ThrowIfFailed(stream.client->Stop(), "Stop render stream");
-            stream.running = false;
-        }
-    }
+    impl_->StopStreams(true);
     impl_->stopped = true;
 }
 
@@ -665,8 +769,7 @@ void TestSpeakerLayout(const double seconds,
             queue.Append(std::move(samples));
         }
         if (!renderer.IsStarted()) {
-            renderer.Prime(queue);
-            renderer.Start();
+            renderer.PrimeAndStart(queue);
         } else {
             renderer.Service(queue, generatedFrames < totalFrames, 20);
             renderer.DiscardConsumed(queue);

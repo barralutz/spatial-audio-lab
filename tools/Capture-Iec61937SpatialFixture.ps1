@@ -8,7 +8,7 @@ param(
         'dynamic-behind', 'silence')]
     [string]$Mode = '714',
 
-    [string]$Endpoint = 'SinkDescription Sample',
+    [string]$Endpoint = '1 - HISENSE (Virtual Audio Device',
 
     [string]$OutputFile
 )

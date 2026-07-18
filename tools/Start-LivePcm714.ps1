@@ -41,6 +41,7 @@ $existing = @(Get-CimInstance Win32_Process `
     Where-Object { $_.CommandLine -match '(?i)\blive-(dtsx-|pcm-)?layout\b' })
 if ($existing.Count -ne 0) {
     & (Join-Path $PSScriptRoot 'Stop-Live714.ps1')
+    & (Join-Path $PSScriptRoot 'Stop-LiveNativeMat714.ps1')
     & (Join-Path $PSScriptRoot 'Stop-LiveDtsX714.ps1')
     & (Join-Path $PSScriptRoot 'Stop-LivePcm714.ps1')
     Start-Sleep -Milliseconds 300

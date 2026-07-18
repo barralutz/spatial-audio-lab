@@ -3,7 +3,7 @@ param(
     [ValidateRange(1.0, 10.0)]
     [double]$SpatialSeconds = 3.0,
 
-    [string]$Endpoint = 'SinkDescription Sample'
+    [string]$Endpoint = '1 - HISENSE (Virtual Audio Device'
 )
 
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()

@@ -18,7 +18,7 @@ param(
     [ValidateRange(0, 86400)]
     [double]$StopAfterSeconds = 0,
 
-    [string]$SinkEndpoint = 'SinkDescription Sample',
+    [string]$SinkEndpoint = '1 - HISENSE (Virtual Audio Device',
 
     [switch]$SkipBridgeSetup
 )

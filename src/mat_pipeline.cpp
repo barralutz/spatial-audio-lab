@@ -37,7 +37,9 @@ struct MatStaticChannel {
 
 constexpr std::size_t kMatOutputFramesPerHalf = 480;
 constexpr std::size_t kMatOutputChannels = 10;
-constexpr std::size_t kMatFullBandSlotsPerHalf = 31;
+constexpr std::size_t kMatStaticFullBandSlots = 11;
+constexpr std::size_t kMat10FullBandSlotsPerHalf = 21;
+constexpr std::size_t kMat2FullBandSlotsPerHalf = 31;
 constexpr std::array<BYTE, 6> kMatFullBandMarker = {0x83, 0x41, 0x43, 0xc2, 0x08, 0x2f};
 constexpr std::array<BYTE, 6> kMatLfeMarker = {0x83, 0x41, 0x40, 0xf2, 0x0b, 0x2f};
 constexpr std::size_t kMatLegacyStaticChannelCount = 9;
@@ -53,6 +55,31 @@ constexpr std::array<MatStaticChannel, 11> kMatStaticChannels = {{
     {8, 9, L"TFR", 45.0, 1.0},
     {9, 8, L"TBL", -135.0, 1.0},
     {10, 9, L"TBR", 135.0, 1.0},
+}};
+
+// ETSI TS 103 190-2 Annex A, SR7.3.0.0 to 7.0.4. Rows are the ten
+// M1..M7/U1..U3 ISF signals; columns follow kMatStaticChannels.
+constexpr std::array<std::array<double, 11>, 10> kMatIsf7300To704 = {{
+    {{ 0.07001853123,  0.07001853123,  1.150134301,  -0.04075061915,
+      -0.04075061915, -0.01279724399, -0.01279724399,  0.0, 0.0, 0.0, 0.0}},
+    {{ 1.150134301,   -0.04075061915,  0.07001853123,  0.07001853123,
+      -0.01279724399, -0.04075061915, -0.01279724399,  0.0, 0.0, 0.0, 0.0}},
+    {{ 0.07001853123, -0.01279724399, -0.04075061915,  1.150134301,
+      -0.01279724399,  0.07001853123, -0.04075061915,  0.0, 0.0, 0.0, 0.0}},
+    {{-0.04075061915, -0.01279724399, -0.01279724399,  0.07001853123,
+      -0.04075061915,  1.150134301,    0.07001853123,  0.0, 0.0, 0.0, 0.0}},
+    {{-0.01279724399, -0.04075061915, -0.01279724399, -0.04075061915,
+       0.07001853123,  0.07001853123,  1.150134301,    0.0, 0.0, 0.0, 0.0}},
+    {{-0.01279724399,  0.07001853123, -0.04075061915, -0.01279724399,
+       1.150134301,   -0.04075061915,  0.07001853123,  0.0, 0.0, 0.0, 0.0}},
+    {{-0.04075061915,  1.150134301,    0.07001853123, -0.01279724399,
+       0.07001853123, -0.01279724399, -0.04075061915,  0.0, 0.0, 0.0, 0.0}},
+    {{ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+       0.8178587706,  0.8178587706, -0.2651752741, -0.2651752741}},
+    {{ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+       0.4745507350, -0.4633842608,  1.016067757,   0.07813276153}},
+    {{ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+      -0.4633842608,  0.4745507350,  0.07813276153,  1.016067757}},
 }};
 
 std::int16_t ReadMatPcm16(const BYTE* sample, const bool bigEndian) {
@@ -106,15 +133,18 @@ std::array<double, 10> MatObject712Gains(const std::array<unsigned, 6>& fields) 
 
 struct Mat712DecodeStats {
     std::size_t bursts{};
+    std::size_t mat10Bursts{};
+    std::size_t mat2Bursts{};
     std::size_t malformedBursts{};
     std::size_t objectMetadataFailures{};
+    std::size_t activeIsfBlocks{};
     std::size_t activeDynamicObjectBlocks{};
     std::uint64_t clippedSamples{};
 };
 
 class Mat712Decoder {
 public:
-    Mat712Decoder() = default;
+    Mat712Decoder() { InitializeIsfGains(); }
 
     explicit Mat712Decoder(const SpeakerLayout& layout)
         : layout_(&layout), outputChannels_(layout.speakers.size()) {
@@ -132,6 +162,7 @@ public:
         const auto lfe = layout.FindSpeaker(L"LFE");
         if (!lfe.has_value()) throw std::runtime_error("MAT layout does not contain LFE");
         lfeOutputChannel_ = *lfe;
+        InitializeIsfGains();
     }
 
     std::vector<std::int16_t> DecodeBurst(const BYTE* payload, const std::size_t payloadBytes) {
@@ -149,20 +180,34 @@ public:
                        (kMatOutputFramesPerHalf / 4) * sizeof(std::int16_t) <=
                    logicalPayload.size();
         };
+        std::size_t fullBandSlotsPerHalf = 0;
+        if (fullBandMarkers.size() == kMat10FullBandSlotsPerHalf * 2) {
+            fullBandSlotsPerHalf = kMat10FullBandSlotsPerHalf;
+        } else if (fullBandMarkers.size() == kMat2FullBandSlotsPerHalf * 2) {
+            fullBandSlotsPerHalf = kMat2FullBandSlotsPerHalf;
+        }
         const bool validMarkers = warmupBursts_ >= 3 &&
-            fullBandMarkers.size() == kMatFullBandSlotsPerHalf * 2 &&
+            fullBandSlotsPerHalf != 0 &&
             lfeMarkers.size() == 2 &&
             std::all_of(fullBandMarkers.begin(), fullBandMarkers.end(), validFullBandMarker) &&
             std::all_of(lfeMarkers.begin(), lfeMarkers.end(), validLfeMarker);
         if (warmupBursts_ >= 3 && !validMarkers) ++stats_.malformedBursts;
-        const bool validObjectMetadata = validMarkers && objectTables.size() == 2 &&
+        const bool isMat10 = fullBandSlotsPerHalf == kMat10FullBandSlotsPerHalf;
+        const bool isMat2 = fullBandSlotsPerHalf == kMat2FullBandSlotsPerHalf;
+        constexpr std::size_t mat2DynamicObjectCount =
+            kMat2FullBandSlotsPerHalf - kMatStaticFullBandSlots;
+        const bool validObjectMetadata = validMarkers && isMat2 &&
+            objectTables.size() == 2 &&
             std::all_of(objectTables.begin(), objectTables.end(),
                         [&logicalPayload](const std::size_t offset) {
-                            constexpr std::size_t objectTableBytes = 20 * 36 / 8;
+                            const std::size_t objectTableBytes =
+                                mat2DynamicObjectCount * 36 / 8;
                             return offset + kMatPositionTablePrefix.size() + objectTableBytes <=
                                    logicalPayload.size();
                         });
-        if (validMarkers && !validObjectMetadata) ++stats_.objectMetadataFailures;
+        if (validMarkers && isMat2 && !validObjectMetadata) {
+            ++stats_.objectMetadataFailures;
+        }
 
         std::vector<std::int16_t> output(
             kMatOutputFramesPerHalf * 2 * outputChannels_, std::int16_t{0});
@@ -180,7 +225,7 @@ public:
                  staticIndex < staticChannelCount; ++staticIndex) {
                 const MatStaticChannel& channel = kMatStaticChannels[staticIndex];
                 const std::size_t markerIndex =
-                    half * kMatFullBandSlotsPerHalf + channel.fullBandSlot;
+                    half * fullBandSlotsPerHalf + channel.fullBandSlot;
                 const BYTE* source = logicalPayload.data() + fullBandMarkers[markerIndex] +
                                      kMatFullBandMarker.size();
                 for (std::size_t frame = 0; frame < kMatOutputFramesPerHalf; ++frame) {
@@ -206,10 +251,33 @@ public:
                         lfeSource + (frame / 4) * sizeof(std::int16_t), true)) / 32768.0;
             }
 
-            if (validObjectMetadata) {
-                for (std::size_t object = 0; object < 20; ++object) {
+            if (isMat10) {
+                for (std::size_t isf = 0; isf < kMatIsf7300To704.size(); ++isf) {
                     const std::size_t markerIndex =
-                        half * kMatFullBandSlotsPerHalf + 11 + object;
+                        half * fullBandSlotsPerHalf + kMatStaticFullBandSlots + isf;
+                    const BYTE* source = logicalPayload.data() + fullBandMarkers[markerIndex] +
+                                         kMatFullBandMarker.size();
+                    bool active = false;
+                    for (std::size_t frame = 0; frame < kMatOutputFramesPerHalf; ++frame) {
+                        const std::int16_t raw = ReadMatPcm16(
+                            source + frame * sizeof(std::int16_t), true);
+                        active = active || raw != 0;
+                        const double sample = static_cast<double>(raw) / 32768.0;
+                        for (std::size_t outputChannel = 0;
+                             outputChannel < outputChannels_; ++outputChannel) {
+                            mixed[frame * outputChannels_ + outputChannel] +=
+                                sample * isfGains_[isf][outputChannel];
+                        }
+                    }
+                    if (active) ++stats_.activeIsfBlocks;
+                }
+            }
+
+            if (validObjectMetadata) {
+                for (std::size_t object = 0;
+                     object < mat2DynamicObjectCount; ++object) {
+                    const std::size_t markerIndex =
+                        half * fullBandSlotsPerHalf + kMatStaticFullBandSlots + object;
                     const BYTE* source = logicalPayload.data() + fullBandMarkers[markerIndex] +
                                          kMatFullBandMarker.size();
                     const auto fields = DecodeMatObjectFields(
@@ -246,6 +314,11 @@ public:
             }
         }
         ++stats_.bursts;
+        if (fullBandSlotsPerHalf == kMat10FullBandSlotsPerHalf) {
+            ++stats_.mat10Bursts;
+        } else if (fullBandSlotsPerHalf == kMat2FullBandSlotsPerHalf) {
+            ++stats_.mat2Bursts;
+        }
         ++warmupBursts_;
         return output;
     }
@@ -255,10 +328,33 @@ public:
     std::size_t OutputChannels() const { return outputChannels_; }
 
 private:
+    void InitializeIsfGains() {
+        isfGains_.assign(kMatIsf7300To704.size(),
+                         std::vector<double>(outputChannels_));
+        for (std::size_t isf = 0; isf < kMatIsf7300To704.size(); ++isf) {
+            for (std::size_t logicalChannel = 0;
+                 logicalChannel < kMatStaticChannels.size(); ++logicalChannel) {
+                const double coefficient = kMatIsf7300To704[isf][logicalChannel];
+                if (layout_ == nullptr) {
+                    const std::size_t outputChannel =
+                        kMatStaticChannels[logicalChannel].outputChannel;
+                    isfGains_[isf][outputChannel] += coefficient;
+                } else {
+                    for (std::size_t outputChannel = 0;
+                         outputChannel < outputChannels_; ++outputChannel) {
+                        isfGains_[isf][outputChannel] +=
+                            coefficient * staticGains_[logicalChannel][outputChannel];
+                    }
+                }
+            }
+        }
+    }
+
     const SpeakerLayout* layout_{};
     std::size_t outputChannels_{kMatOutputChannels};
     std::size_t lfeOutputChannel_{3};
     std::vector<std::vector<double>> staticGains_;
+    std::vector<std::vector<double>> isfGains_;
     Mat712DecodeStats stats_;
     std::size_t warmupBursts_{};
 };
@@ -349,8 +445,9 @@ void ExtractMat712Wave(const std::filesystem::path& inputPath,
     }
     const auto* inputExtensible =
         reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(inputFormat);
-    if (!IsEqualGUID(inputExtensible->SubFormat, kDolbyMat21Profile3)) {
-        throw std::runtime_error("7.1.2 extraction currently requires MAT 2.1 Profile 3");
+    if (!IsEqualGUID(inputExtensible->SubFormat, kDolbyMat21Profile3) &&
+        !IsEqualGUID(inputExtensible->SubFormat, kDolbyMlpMat10)) {
+        throw std::runtime_error("7.1.2 extraction requires MAT 1.0 or MAT 2.1 Profile 3");
     }
 
     const BYTE* data = image.bytes.data() + image.dataOffset;
@@ -393,8 +490,10 @@ void ExtractMat712Wave(const std::filesystem::path& inputPath,
                                              : image.dataBytes - payloadOffset;
         if (payloadBytes < 60'000) break;
         const auto output = decoder.DecodeBurst(data + payloadOffset, payloadBytes);
-        writer.Write(reinterpret_cast<const BYTE*>(output.data()), 960, false);
-        for (std::size_t frame = 0; frame < 960; ++frame) {
+        const std::size_t decodedFrames = output.size() / kMatOutputChannels;
+        writer.Write(reinterpret_cast<const BYTE*>(output.data()),
+                     static_cast<UINT32>(decodedFrames), false);
+        for (std::size_t frame = 0; frame < decodedFrames; ++frame) {
             for (std::size_t channel = 0; channel < kMatOutputChannels; ++channel) {
                     const std::int16_t sample = output[frame * kMatOutputChannels + channel];
                     const long double normalized = static_cast<long double>(sample) / 32768.0L;
@@ -404,20 +503,22 @@ void ExtractMat712Wave(const std::filesystem::path& inputPath,
                     peaks[channel] = std::max(peaks[channel], magnitude);
             }
         }
-        outputFrames += 960;
+        outputFrames += decodedFrames;
         ++burstsWritten;
     }
     const Mat712DecodeStats& decodeStats = decoder.Stats();
     writer.Finalize();
     std::wcout << L"MAT 7.1.2 extraction written: " << outputPath.wstring() << L"\n"
                << L"Bursts: " << burstsWritten << L", frames: "
-               << (burstsWritten * 960) << L", format: "
+               << outputFrames << L", format: "
                << WaveFormatText(&outputFormat.Format) << L"\n";
     if (decodeStats.malformedBursts != 0) {
         std::wcout << L"Malformed bursts replaced with silence: "
                    << decodeStats.malformedBursts << L"\n";
     }
-    std::wcout << L"Active dynamic-object blocks mixed: "
+    std::wcout << L"Active MAT 1.0 ISF blocks mixed: "
+               << decodeStats.activeIsfBlocks << L"\n"
+               << L"Active MAT 2.x dynamic-object blocks mixed: "
                << decodeStats.activeDynamicObjectBlocks << L"\n";
     if (decodeStats.objectMetadataFailures != 0) {
         std::wcout << L"Bursts without a decodable object table: "
@@ -452,8 +553,9 @@ void AnalyzeMatLayout(const std::filesystem::path& inputPath,
     }
     const auto* inputExtensible =
         reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(inputFormat);
-    if (!IsEqualGUID(inputExtensible->SubFormat, kDolbyMat21Profile3)) {
-        throw std::runtime_error("Layout analyzer requires MAT 2.1 Profile 3");
+    if (!IsEqualGUID(inputExtensible->SubFormat, kDolbyMat21Profile3) &&
+        !IsEqualGUID(inputExtensible->SubFormat, kDolbyMlpMat10)) {
+        throw std::runtime_error("Layout analyzer requires MAT 1.0 or MAT 2.1 Profile 3");
     }
 
     const SpeakerLayout layout = LoadSpeakerLayout(layoutPath);
@@ -479,7 +581,8 @@ void AnalyzeMatLayout(const std::filesystem::path& inputPath,
                                              : image.dataBytes - payloadOffset;
         if (payloadBytes < 60'000) break;
         const auto output = decoder.DecodeBurst(data + payloadOffset, payloadBytes);
-        for (std::size_t frame = 0; frame < 960; ++frame) {
+        const std::size_t decodedFrames = output.size() / layout.speakers.size();
+        for (std::size_t frame = 0; frame < decodedFrames; ++frame) {
             for (std::size_t channel = 0; channel < layout.speakers.size(); ++channel) {
                 const double sample = static_cast<double>(
                     output[frame * layout.speakers.size() + channel]) / 32768.0;
@@ -487,13 +590,16 @@ void AnalyzeMatLayout(const std::filesystem::path& inputPath,
                 peaks[channel] = std::max(peaks[channel], std::abs(sample));
             }
         }
-        outputFrames += 960;
+        outputFrames += decodedFrames;
     }
 
     const Mat712DecodeStats& stats = decoder.Stats();
     std::wcout << L"MAT layout analysis: " << layout.name << L"\n"
                << L"  bursts=" << stats.bursts << L", frames=" << outputFrames
+               << L", MAT1=" << stats.mat10Bursts << L", MAT2=" << stats.mat2Bursts
                << L", malformed=" << stats.malformedBursts
+               << L", ISF blocks=" << stats.activeIsfBlocks
+               << L", dynamic blocks=" << stats.activeDynamicObjectBlocks
                << L", clipped=" << stats.clippedSamples << L"\n"
                << L"Channel RMS / peak dBFS:\n";
     for (std::size_t channel = 0; channel < layout.speakers.size(); ++channel) {
@@ -929,7 +1035,11 @@ void PlayLiveMat712(const double seconds,
                << L"  ring bytes=" << ringBytes << L", driver dropped="
                << ringStats.DroppedBytes << L", sequence gaps=" << sequenceGaps << L"\n"
                << L"  bursts=" << decodeStats.bursts << L", malformed="
-               << decodeStats.malformedBursts << L", clipped=" << decodeStats.clippedSamples
+               << decodeStats.malformedBursts << L", MAT1=" << decodeStats.mat10Bursts
+               << L", MAT2=" << decodeStats.mat2Bursts
+               << L", ISF blocks=" << decodeStats.activeIsfBlocks
+               << L", dynamic blocks=" << decodeStats.activeDynamicObjectBlocks
+               << L", clipped=" << decodeStats.clippedSamples
                << L", framer discarded=" << framer.DiscardedBytes()
                << L", buffered=" << framer.BufferedBytes() << L"\n"
                << L"  max PCM queue=" << maximumQueuedFrames
@@ -1022,8 +1132,7 @@ void PlayLiveMatLayout(const double seconds,
             const std::uint64_t queuedForAll = renderer.MinimumFramesAvailable(queue);
             if (!renderer.IsStarted() &&
                 (queuedForAll >= prebufferFrames || (!acceptingInput && queuedForAll != 0))) {
-                renderer.Prime(queue);
-                renderer.Start();
+                renderer.PrimeAndStart(queue);
             }
 
             if (renderer.IsStarted()) {
@@ -1052,7 +1161,11 @@ void PlayLiveMatLayout(const double seconds,
                << L"  ring bytes=" << ringBytes << L", driver dropped="
                << ringStats.DroppedBytes << L", sequence gaps=" << sequenceGaps << L"\n"
                << L"  bursts=" << decodeStats.bursts << L", malformed="
-               << decodeStats.malformedBursts << L", clipped=" << decodeStats.clippedSamples
+               << decodeStats.malformedBursts << L", MAT1=" << decodeStats.mat10Bursts
+               << L", MAT2=" << decodeStats.mat2Bursts
+               << L", ISF blocks=" << decodeStats.activeIsfBlocks
+               << L", dynamic blocks=" << decodeStats.activeDynamicObjectBlocks
+               << L", clipped=" << decodeStats.clippedSamples
                << L", framer discarded=" << framer.DiscardedBytes()
                << L", buffered=" << framer.BufferedBytes() << L"\n"
                << L"  max PCM queue=" << maximumQueuedFrames << L" frames\n";

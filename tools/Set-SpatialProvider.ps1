@@ -1,10 +1,10 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('Atmos', 'DtsX', 'Pcm')]
+    [ValidateSet('Atmos', 'NativeMat', 'DtsX', 'Pcm')]
     [string]$Mode,
 
-    [string]$EndpointFilter = 'SinkDescription Sample',
+    [string]$EndpointFilter = '1 - HISENSE (Virtual Audio Device',
 
     [string]$DeviceInstanceId = 'ROOT\MEDIA\0001',
 
@@ -51,6 +51,9 @@ public static class SpatialRegistryAccess {
     static extern int RegSetValueEx(IntPtr key, string name, uint reserved,
                                      uint type, byte[] data, int size);
 
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode)]
+    static extern int RegDeleteValue(IntPtr key, string name);
+
     [DllImport("advapi32.dll")]
     static extern int RegCloseKey(IntPtr key);
 
@@ -62,6 +65,7 @@ public static class SpatialRegistryAccess {
             uint type;
             uint size = 0;
             error = RegQueryValueEx(key, name, IntPtr.Zero, out type, null, ref size);
+            if (error == 2) return null;
             if (error != 0) throw new Win32Exception(error);
             if (type != 3) throw new InvalidOperationException(
                 "The spatial endpoint property is not REG_BINARY.");
@@ -79,7 +83,12 @@ public static class SpatialRegistryAccess {
         int error = RegOpenKeyEx(HKEY_LOCAL_MACHINE, subKey, 0, 0x0002, out key);
         if (error != 0) throw new Win32Exception(error);
         try {
-            error = RegSetValueEx(key, name, 0, 3, data, data.Length);
+            if (data == null) {
+                error = RegDeleteValue(key, name);
+                if (error == 2) return;
+            } else {
+                error = RegSetValueEx(key, name, 0, 3, data, data.Length);
+            }
             if (error != 0) throw new Win32Exception(error);
         } finally {
             RegCloseKey(key);
@@ -233,7 +242,13 @@ function Set-NativePcmDeviceFormat {
 }
 
 function Set-SpatialCodecDeviceFormat([string]$RequestedMode) {
-    $codec = if ($RequestedMode -eq 'Atmos') { 'atmos' } else { 'dtsx' }
+    $codec = if ($RequestedMode -eq 'NativeMat') {
+        'mat10'
+    } elseif ($RequestedMode -eq 'Atmos') {
+        'atmos'
+    } else {
+        'dtsx'
+    }
     $output = @(& $exe set-codec-format $codec $EndpointFilter 2>&1 |
         ForEach-Object { "$_" })
     if ($LASTEXITCODE -ne 0) {
@@ -328,6 +343,12 @@ function Set-SpatialRegistryFallback([string]$RequestedMode) {
             Write-Host 'Rebuilding the audio services for native PCM 7.1.4.'
             Restart-AudioServices
             Set-NativePcmDeviceFormat
+        } elseif ($RequestedMode -eq 'NativeMat') {
+            Write-Host 'Selecting the MAT carrier before disabling Windows spatial audio.'
+            Set-SpatialCodecDeviceFormat $RequestedMode
+            Write-NativePcmRegistryState $registrySubKey $valueNames $original
+            Write-Host 'Rebuilding the audio services for native MAT.'
+            Restart-AudioServices
         } else {
             Write-Host "Disabling the current spatial provider before selecting $RequestedMode."
             Write-NativePcmRegistryState $registrySubKey $valueNames $original
@@ -341,13 +362,19 @@ function Set-SpatialRegistryFallback([string]$RequestedMode) {
         $verified = Wait-SpatialPreflight $RequestedMode
         if (-not $verified.Ready) {
             Write-Warning 'The service restart was insufficient; trying device reenumeration.'
-            if ($RequestedMode -eq 'Pcm') {
+            if ($RequestedMode -in @('Pcm', 'NativeMat')) {
                 Write-NativePcmRegistryState $registrySubKey $valueNames $original
             } else {
                 Write-SpatialRegistryState $registrySubKey $valueNames $RequestedMode
             }
+            if ($RequestedMode -eq 'NativeMat') {
+                Set-SpatialCodecDeviceFormat $RequestedMode
+                Write-NativePcmRegistryState $registrySubKey $valueNames $original
+            }
             Restart-SpatialDevice
-            if ($RequestedMode -eq 'Pcm') { Set-NativePcmDeviceFormat }
+            if ($RequestedMode -eq 'Pcm') {
+                Set-NativePcmDeviceFormat
+            }
             $verified = Wait-SpatialPreflight $RequestedMode
             if (-not $verified.Ready) {
                 throw "$RequestedMode did not become ready.`n$($verified.Output -join "`n")"
@@ -378,13 +405,23 @@ if ($LASTEXITCODE -ne 0) {
 $alreadyReady = Invoke-SpatialPreflight $Mode
 if ($alreadyReady.Ready) {
     $alreadyReady.Output | Write-Host
-    Write-Host "$Mode spatial provider is already active."
+    if ($Mode -eq 'NativeMat') {
+        Write-Host 'Native MAT mode is already active.'
+    } elseif ($Mode -eq 'Pcm') {
+        Write-Host 'Native PCM 7.1.4 mode is already active.'
+    } else {
+        Write-Host "$Mode spatial provider is already active."
+    }
     return
 }
 
-if ($Mode -eq 'Pcm') {
+if ($Mode -in @('Pcm', 'NativeMat')) {
     Set-SpatialRegistryFallback $Mode
-    Write-Host 'Native PCM 7.1.4 mode selected and verified.'
+    if ($Mode -eq 'Pcm') {
+        Write-Host 'Native PCM 7.1.4 mode selected and verified.'
+    } else {
+        Write-Host 'Native MAT mode selected and verified.'
+    }
     return
 }
 

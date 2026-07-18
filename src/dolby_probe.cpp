@@ -31,8 +31,9 @@ void PrintUsage() {
         << L"SpatialAudioLab.CLI list-endpoints\n"
         << L"SpatialAudioLab.CLI set-default [endpoint-filter]\n"
         << L"SpatialAudioLab.CLI set-pcm714-format [endpoint-filter]\n"
-        << L"SpatialAudioLab.CLI set-codec-format <atmos|dtsx> [endpoint-filter]\n"
+        << L"SpatialAudioLab.CLI set-codec-format <atmos|mat10|dtsx> [endpoint-filter]\n"
         << L"SpatialAudioLab.CLI device-format [endpoint-filter]\n"
+        << L"SpatialAudioLab.CLI jack-info [endpoint-filter]\n"
         << L"SpatialAudioLab.CLI render-test [seconds] [endpoint-filter] [pcm|mat20|mat21]\n"
         << L"SpatialAudioLab.CLI replay-iec61937 input.wav [endpoint-filter] [repeat]\n"
         << L"SpatialAudioLab.CLI spatial-test [seconds] [endpoint-filter] "
@@ -49,6 +50,7 @@ void PrintUsage() {
         << L"SpatialAudioLab.CLI probe-media-types input-media\n"
         << L"SpatialAudioLab.CLI capture-mat-ring [seconds] [output.wav] [poll-ms]\n"
         << L"SpatialAudioLab.CLI capture-iec61937-ring [seconds] [output.wav] [poll-ms]\n"
+        << L"SpatialAudioLab.CLI driver-format-log [reset]\n"
         << L"SpatialAudioLab.CLI analyze input.wav\n"
         << L"SpatialAudioLab.CLI analyze-iec61937 input.wav\n"
         << L"SpatialAudioLab.CLI extract-dtshd input.wav output.dts\n"
@@ -99,31 +101,43 @@ int wmain(const int argc, wchar_t** argv) {
         }
 
         if (command == L"set-default") {
-            const std::wstring filter = argc >= 3 ? argv[2] : L"SinkDescription Sample";
+            const std::wstring filter = argc >= 3 ? argv[2] : L"1 - HISENSE (Virtual Audio Device";
             SetDefaultEndpoint(filter);
             return 0;
         }
 
         if (command == L"set-pcm714-format") {
-            const std::wstring filter = argc >= 3 ? argv[2] : L"SinkDescription Sample";
+            const std::wstring filter = argc >= 3 ? argv[2] : L"1 - HISENSE (Virtual Audio Device";
             SetNativePcm714Format(filter);
             return 0;
         }
 
         if (command == L"set-codec-format") {
-            if (argc < 3) throw std::invalid_argument("set-codec-format requires atmos or dtsx");
-            const std::wstring mode = Lowercase(argv[2]);
-            if (mode != L"atmos" && mode != L"dtsx") {
-                throw std::invalid_argument("set-codec-format requires atmos or dtsx");
+            if (argc < 3) {
+                throw std::invalid_argument("set-codec-format requires atmos, mat10 or dtsx");
             }
-            const std::wstring filter = argc >= 4 ? argv[3] : L"SinkDescription Sample";
-            SetSpatialCodecFormat(filter, mode == L"dtsx");
+            const std::wstring mode = Lowercase(argv[2]);
+            if (mode != L"atmos" && mode != L"mat10" && mode != L"dtsx") {
+                throw std::invalid_argument("set-codec-format requires atmos, mat10 or dtsx");
+            }
+            const std::wstring filter = argc >= 4 ? argv[3] : L"1 - HISENSE (Virtual Audio Device";
+            if (mode == L"mat10") {
+                SetLegacyMatFormat(filter);
+            } else {
+                SetSpatialCodecFormat(filter, mode == L"dtsx");
+            }
             return 0;
         }
 
         if (command == L"device-format") {
-            const std::wstring filter = argc >= 3 ? argv[2] : L"SinkDescription Sample";
+            const std::wstring filter = argc >= 3 ? argv[2] : L"1 - HISENSE (Virtual Audio Device";
             PrintConfiguredFormats(filter);
+            return 0;
+        }
+
+        if (command == L"jack-info") {
+            const std::wstring filter = argc >= 3 ? argv[2] : L"1 - HISENSE (Virtual Audio Device";
+            PrintEndpointJackInfo(filter);
             return 0;
         }
 
@@ -141,7 +155,7 @@ int wmain(const int argc, wchar_t** argv) {
 
         if (command == L"render-test") {
             const double seconds = argc >= 3 ? std::stod(argv[2]) : 2.0;
-            std::wstring filter = argc >= 4 ? argv[3] : L"SinkDescription Sample";
+            std::wstring filter = argc >= 4 ? argv[3] : L"1 - HISENSE (Virtual Audio Device";
             if (filter == L"-" || Lowercase(filter) == L"default") filter.clear();
             const std::wstring mode = argc >= 5 ? Lowercase(argv[4]) : L"mat20";
             if (seconds <= 0.0 || seconds > 60.0) {
@@ -155,7 +169,7 @@ int wmain(const int argc, wchar_t** argv) {
             if (argc < 3) {
                 throw std::runtime_error("replay-iec61937 requires an input WAV path");
             }
-            const std::wstring filter = argc >= 4 ? argv[3] : L"SinkDescription Sample";
+            const std::wstring filter = argc >= 4 ? argv[3] : L"1 - HISENSE (Virtual Audio Device";
             const std::uint64_t repeatCount = argc >= 5 ? std::stoull(argv[4]) : 1;
             if (repeatCount == 0 || repeatCount > 1'000) {
                 throw std::runtime_error("IEC 61937 repeat count must be between 1 and 1000");
@@ -166,7 +180,7 @@ int wmain(const int argc, wchar_t** argv) {
 
         if (command == L"spatial-test") {
             const double seconds = argc >= 3 ? std::stod(argv[2]) : 2.0;
-            std::wstring filter = argc >= 4 ? argv[3] : L"SinkDescription Sample";
+            std::wstring filter = argc >= 4 ? argv[3] : L"1 - HISENSE (Virtual Audio Device";
             if (filter == L"-" || Lowercase(filter) == L"default") filter.clear();
             const std::wstring mode = argc >= 5 ? Lowercase(argv[4]) : L"712";
             if (seconds <= 0.0 || seconds > 60.0) {
@@ -340,7 +354,7 @@ int wmain(const int argc, wchar_t** argv) {
         }
 
         if (command == L"probe-spatial-metadata") {
-            const std::wstring filter = argc >= 3 ? argv[2] : L"SinkDescription Sample";
+            const std::wstring filter = argc >= 3 ? argv[2] : L"1 - HISENSE (Virtual Audio Device";
             ProbeSpatialMetadata(filter);
             return 0;
         }
@@ -408,6 +422,18 @@ int wmain(const int argc, wchar_t** argv) {
                     "Ring capture requires 0 < seconds <= 600 and 0 < poll-ms <= 1000");
             }
             CaptureIec61937Ring(seconds, output, pollMilliseconds);
+            return 0;
+        }
+
+        if (command == L"driver-format-log") {
+            if (argc >= 3 && Lowercase(argv[2]) == L"reset") {
+                ResetDriverFormatLog();
+            } else if (argc >= 3) {
+                throw std::runtime_error(
+                    "driver-format-log accepts only the optional reset argument");
+            } else {
+                PrintDriverFormatLog();
+            }
             return 0;
         }
 

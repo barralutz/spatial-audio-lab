@@ -33,7 +33,7 @@ static async Task<int> MainAsync(string[] args) {
         Pcm714Buffer queue = new();
         queue.Reset(0);
         queue.Append(pcm);
-        using PcmSinkOutput714 output = new(queue, "SinkDescription Sample", gain);
+        using PcmSinkOutput714 output = new(queue, "1 - HISENSE (Virtual Audio Device", gain);
         Console.WriteLine($"PCM 7.1.4 sink: {output.OutputName}");
         output.Play();
         double duration = pcm.Length / (double)(Pcm714Buffer.Channels * Pcm714Buffer.SampleRate);
@@ -157,7 +157,7 @@ static PlayerOptions ParseOptions(string[] args) {
     int? stream = null;
     double start = 0;
     float gain = 1;
-    string sink = "SinkDescription Sample";
+    string sink = "1 - HISENSE (Virtual Audio Device";
     double avDelay = 0;
     double? stopAfter = null;
     bool controlTest = false;

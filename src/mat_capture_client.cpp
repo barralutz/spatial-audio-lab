@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <iomanip>
 #include <iostream>
 #include <memory>
 #include <sstream>
@@ -200,6 +201,123 @@ MatCaptureReadView ReadMatCapture(const HANDLE device, std::vector<BYTE>& reques
         return {header, request.data() + legacy.headerBytes};
     }
     throw std::runtime_error("Capture driver returned an unsupported protocol version");
+}
+
+void ResetDriverFormatLog() {
+    WinHandle device = OpenMatCaptureDevice();
+    DWORD returned = 0;
+    if (!DeviceIoControl(device.Get(), IOCTL_MAT_CAPTURE_RESET_FORMAT_LOG, nullptr, 0,
+                         nullptr, 0, &returned, nullptr)) {
+        std::ostringstream message;
+        message << "IOCTL_MAT_CAPTURE_RESET_FORMAT_LOG failed (Win32 "
+                << GetLastError() << ')';
+        throw std::runtime_error(message.str());
+    }
+    std::wcout << L"Driver format log reset.\n";
+}
+
+void PrintDriverFormatLog() {
+    constexpr std::size_t recordCapacity = 512;
+    WinHandle device = OpenMatCaptureDevice();
+    std::vector<BYTE> response(
+        sizeof(MAT_CAPTURE_FORMAT_LOG) + recordCapacity * sizeof(MAT_CAPTURE_FORMAT_EVENT));
+    DWORD returned = 0;
+    if (!DeviceIoControl(device.Get(), IOCTL_MAT_CAPTURE_GET_FORMAT_LOG, nullptr, 0,
+                         response.data(), static_cast<DWORD>(response.size()),
+                         &returned, nullptr)) {
+        std::ostringstream message;
+        message << "IOCTL_MAT_CAPTURE_GET_FORMAT_LOG failed (Win32 "
+                << GetLastError() << ')';
+        throw std::runtime_error(message.str());
+    }
+    if (returned < sizeof(MAT_CAPTURE_FORMAT_LOG)) {
+        throw std::runtime_error("Capture driver returned a truncated format log");
+    }
+
+    const auto& log = *reinterpret_cast<const MAT_CAPTURE_FORMAT_LOG*>(response.data());
+    if (log.Version != MAT_CAPTURE_FORMAT_LOG_VERSION ||
+        log.HeaderBytes != sizeof(MAT_CAPTURE_FORMAT_LOG) ||
+        log.RecordBytes != sizeof(MAT_CAPTURE_FORMAT_EVENT) ||
+        log.RecordCount > recordCapacity ||
+        static_cast<std::uint64_t>(log.HeaderBytes) +
+                static_cast<std::uint64_t>(log.RecordCount) * log.RecordBytes > returned) {
+        throw std::runtime_error("Capture driver returned an incompatible format log");
+    }
+
+    const auto* records = reinterpret_cast<const MAT_CAPTURE_FORMAT_EVENT*>(
+        response.data() + log.HeaderBytes);
+    const ULONGLONG origin = log.RecordCount == 0 ? 0 : records[0].InterruptTime100ns;
+    std::wcout << L"Driver format log: retained=" << log.RecordCount
+               << L", total=" << log.TotalRecords
+               << L", overwritten=" << log.DroppedRecords << L"\n";
+
+    for (ULONG index = 0; index < log.RecordCount; ++index) {
+        const auto& event = records[index];
+        const wchar_t* type = event.Type == MatCaptureFormatEventIsFormatSupported
+                                ? L"support"
+                                : event.Type == MatCaptureFormatEventNewStream
+                                    ? L"stream"
+                                    : event.Type == MatCaptureFormatEventWritePacket
+                                        ? L"packet"
+                                    : L"unknown";
+
+        const double milliseconds = static_cast<double>(
+            event.InterruptTime100ns - origin) / 10'000.0;
+        if (event.Type == MatCaptureFormatEventWritePacket) {
+            const ULONG lastPacket = static_cast<ULONG>(event.FormatTag) |
+                (static_cast<ULONG>(event.Channels) << 16);
+            std::wcout << L'#' << event.Sequence
+                       << L" +" << std::fixed << std::setprecision(3) << milliseconds << L" ms"
+                       << L" packet stream=0x" << std::hex << std::uppercase
+                       << event.ProcessId
+                       << L" number=" << std::dec << event.Pin;
+            if (lastPacket == ULONG_MAX) {
+                std::wcout << L" last=none";
+            } else {
+                std::wcout << L" last=" << lastPacket;
+            }
+            std::wcout << L" state=" << event.Capture
+                       << L" status=0x" << std::hex << std::uppercase
+                       << std::setw(8) << std::setfill(L'0')
+                       << static_cast<std::uint32_t>(event.Status)
+                       << std::dec << std::nouppercase << std::setfill(L' ')
+                       << L" buffer=" << event.FormatSize
+                       << L" notifications=" << event.ChannelMask
+                       << L" packet-bytes=" << event.AverageBytesPerSecond
+                       << L" interval=" << event.SampleRate << L" ms\n";
+            continue;
+        }
+
+        WAVEFORMATEXTENSIBLE format{};
+        format.Format.wFormatTag = event.FormatTag;
+        format.Format.nChannels = event.Channels;
+        format.Format.nSamplesPerSec = event.SampleRate;
+        format.Format.nAvgBytesPerSec = event.AverageBytesPerSecond;
+        format.Format.nBlockAlign = event.BlockAlign;
+        format.Format.wBitsPerSample = event.BitsPerSample;
+        format.Format.cbSize = event.ExtraSize;
+        format.Samples.wValidBitsPerSample = event.ValidBitsPerSample;
+        format.dwChannelMask = event.ChannelMask;
+        format.SubFormat = event.WaveSubFormat;
+
+        std::wcout << L'#' << event.Sequence
+                   << L" +" << std::fixed << std::setprecision(3) << milliseconds << L" ms"
+                   << L" " << type
+                   << L" pid=" << event.ProcessId
+                   << L" tid=" << event.ThreadId
+                   << L" pin=" << event.Pin
+                   << (event.Capture != 0 ? L" capture" : L" render")
+                   << L" status=0x" << std::hex << std::uppercase
+                   << std::setw(8) << std::setfill(L'0')
+                   << static_cast<std::uint32_t>(event.Status)
+                   << std::dec << std::nouppercase << std::setfill(L' ')
+                   << L" " << WaveFormatText(&format.Format)
+                   << L", avg=" << event.AverageBytesPerSecond << L" B/s";
+        if (!IsEqualGUID(event.DataSubFormat, event.WaveSubFormat)) {
+            std::wcout << L"; KS subtype=" << GuidText(event.DataSubFormat);
+        }
+        std::wcout << L"\n";
+    }
 }
 
 void CaptureIec61937Ring(const double seconds, const std::filesystem::path& outputPath,

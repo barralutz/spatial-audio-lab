@@ -271,16 +271,24 @@
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="8" />
                     <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="8" />
-                    <ColumnDefinition Width="*" />
                   </Grid.ColumnDefinitions>
+                  <Grid.RowDefinitions>
+                    <RowDefinition Height="34" />
+                    <RowDefinition Height="8" />
+                    <RowDefinition Height="34" />
+                  </Grid.RowDefinitions>
                   <RadioButton x:Name="MatModeButton" Style="{StaticResource SegmentButton}"
-                               GroupName="BridgeMode" IsChecked="True" Content="Dolby MAT"
-                               Click="BridgeModeClick" />
+                               GroupName="BridgeMode" IsChecked="True" Content="Atmos (Windows)"
+                               Click="BridgeModeClick"
+                               ToolTip="Dolby Atmos mediante Windows Spatial Audio" />
                   <RadioButton Grid.Column="2" x:Name="DtsXModeButton"
                                Style="{StaticResource SegmentButton}" GroupName="BridgeMode"
                                Content="DTS:X" Click="BridgeModeClick" />
-                  <RadioButton Grid.Column="4" x:Name="PcmModeButton"
+                  <RadioButton Grid.Row="2" x:Name="NativeMatModeButton"
+                               Style="{StaticResource SegmentButton}" GroupName="BridgeMode"
+                               Content="MAT nativo (BF1)" Click="BridgeModeClick"
+                               ToolTip="Carrier MAT directo con Windows Spatial Audio desactivado" />
+                  <RadioButton Grid.Row="2" Grid.Column="2" x:Name="PcmModeButton"
                                Style="{StaticResource SegmentButton}" GroupName="BridgeMode"
                                Content="PCM 7.1.4" Click="BridgeModeClick"
                                ToolTip="Renderer propio sin codificador Dolby o DTS" />

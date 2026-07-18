@@ -42,13 +42,28 @@ std::wstring HResultText(const HRESULT result) {
     return text.str();
 }
 
+namespace {
+
+std::string AudioClientErrorMessage(const HRESULT result, const char* operation) {
+    std::ostringstream message;
+    message << operation << " failed (0x" << std::hex
+            << static_cast<std::uint32_t>(result) << ')';
+    return message.str();
+}
+
+} // namespace
+
+AudioClientError::AudioClientError(const HRESULT result, const char* operation)
+    : std::runtime_error(AudioClientErrorMessage(result, operation)), result_(result) {}
+
 void ThrowIfFailed(const HRESULT result, const char* operation) {
-    if (FAILED(result)) {
-        std::ostringstream message;
-        message << operation << " failed (0x" << std::hex
-                << static_cast<std::uint32_t>(result) << ')';
-        throw std::runtime_error(message.str());
-    }
+    if (FAILED(result)) throw AudioClientError(result, operation);
+}
+
+bool IsRecoverableAudioClientError(const HRESULT result) {
+    return result == AUDCLNT_E_DEVICE_INVALIDATED ||
+           result == AUDCLNT_E_RESOURCES_INVALIDATED ||
+           result == AUDCLNT_E_SERVICE_NOT_RUNNING;
 }
 
 std::wstring GuidText(const GUID& guid) {
@@ -316,6 +331,54 @@ void SetSpatialCodecFormat(const std::wstring& filter, const bool dtsX) {
                << L"ID: " << endpoint.id << L"\n";
 }
 
+void SetLegacyMatFormat(const std::wstring& filter) {
+    Endpoint endpoint = SelectEndpoint(filter);
+    WAVEFORMATEXTENSIBLE carrier{};
+    carrier.Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
+    carrier.Format.nChannels = 8;
+    carrier.Format.nSamplesPerSec = 192'000;
+    carrier.Format.nAvgBytesPerSec = 3'072'000;
+    carrier.Format.nBlockAlign = 16;
+    carrier.Format.wBitsPerSample = 16;
+    carrier.Format.cbSize = sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX);
+    carrier.Samples.wValidBitsPerSample = 16;
+    carrier.dwChannelMask = KSAUDIO_SPEAKER_7POINT1_SURROUND;
+    carrier.SubFormat = kDolbyMlpMat10;
+    WAVEFORMATEXTENSIBLE mix{};
+    mix.Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
+    mix.Format.nChannels = 8;
+    mix.Format.nSamplesPerSec = 48'000;
+    mix.Format.nAvgBytesPerSec = 1'536'000;
+    mix.Format.nBlockAlign = 32;
+    mix.Format.wBitsPerSample = 32;
+    mix.Format.cbSize = sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX);
+    mix.Samples.wValidBitsPerSample = 32;
+    mix.dwChannelMask = KSAUDIO_SPEAKER_7POINT1_SURROUND;
+    mix.SubFormat = kIeeeFloat;
+
+    ComPtr<IAudioClient> client;
+    ThrowIfFailed(endpoint.device->Activate(__uuidof(IAudioClient), CLSCTX_ALL,
+                                             nullptr, &client),
+                  "Activate legacy MAT endpoint");
+    const HRESULT support = client->IsFormatSupported(
+        AUDCLNT_SHAREMODE_EXCLUSIVE, &carrier.Format, nullptr);
+    if (support != S_OK) {
+        ThrowIfFailed(support, "Validate legacy MAT endpoint format");
+        throw std::runtime_error("The endpoint did not accept Dolby MLP / MAT 1.0 exactly");
+    }
+
+    ComPtr<IPolicyConfig> policy;
+    ThrowIfFailed(CoCreateInstance(__uuidof(PolicyConfigClient), nullptr, CLSCTX_ALL,
+                                   IID_PPV_ARGS(&policy)),
+                  "Create audio policy client");
+    ThrowIfFailed(policy->SetDeviceFormat(endpoint.id.c_str(),
+                                           &carrier.Format, &mix.Format),
+                  "Set legacy MAT endpoint format");
+    std::wcout << L"Dolby MLP / MAT 1.0 device format and 7.1 mix selected: "
+               << endpoint.name << L"\n"
+               << L"ID: " << endpoint.id << L"\n";
+}
+
 namespace {
 
 void PrintPolicyFormat(const wchar_t* label, const HRESULT result, WAVEFORMATEX* format) {
@@ -353,6 +416,131 @@ void PrintConfiguredFormats(const std::wstring& filter) {
     const HRESULT defaultResult =
         policy->GetDeviceFormat(endpoint.id.c_str(), TRUE, &defaultFormat);
     PrintPolicyFormat(L"device default", defaultResult, defaultFormat);
+}
+
+namespace {
+
+void PrintConnectorJackInfo(IConnector* connector, const wchar_t* label) {
+    ConnectorType type{};
+    DataFlow flow{};
+    BOOL connected = FALSE;
+    const HRESULT typeResult = connector->GetType(&type);
+    const HRESULT flowResult = connector->GetDataFlow(&flow);
+    const HRESULT connectedResult = connector->IsConnected(&connected);
+
+    std::wcout << L"  " << label << L":\n"
+               << L"    type: "
+               << (SUCCEEDED(typeResult) ? std::to_wstring(static_cast<UINT32>(type))
+                                         : HResultText(typeResult))
+               << L"\n"
+               << L"    flow: "
+               << (SUCCEEDED(flowResult) ? std::to_wstring(static_cast<UINT32>(flow))
+                                         : HResultText(flowResult))
+               << L"\n"
+               << L"    connected: ";
+    if (SUCCEEDED(connectedResult)) {
+        std::wcout << (connected ? L"yes" : L"no") << L"\n";
+    } else {
+        std::wcout << HResultText(connectedResult) << L"\n";
+    }
+
+    ComPtr<IPart> part;
+    const HRESULT partResult = connector->QueryInterface(IID_PPV_ARGS(&part));
+    if (FAILED(partResult)) {
+        std::wcout << L"    IPart: " << HResultText(partResult) << L"\n";
+        return;
+    }
+
+    ComPtr<IKsJackDescription> jackDescription;
+    const HRESULT jackResult = part->Activate(
+        CLSCTX_ALL, __uuidof(IKsJackDescription),
+        reinterpret_cast<void**>(jackDescription.GetAddressOf()));
+    if (SUCCEEDED(jackResult)) {
+        UINT count = 0;
+        const HRESULT countResult = jackDescription->GetJackCount(&count);
+        std::wcout << L"    jack descriptions: ";
+        if (FAILED(countResult)) {
+            std::wcout << HResultText(countResult) << L"\n";
+        } else {
+            std::wcout << count << L"\n";
+            for (UINT index = 0; index < count; ++index) {
+                KSJACK_DESCRIPTION description{};
+                const HRESULT descriptionResult =
+                    jackDescription->GetJackDescription(index, &description);
+                if (FAILED(descriptionResult)) {
+                    std::wcout << L"      [" << index << L"] "
+                               << HResultText(descriptionResult) << L"\n";
+                    continue;
+                }
+                std::wcout << L"      [" << index << L"] channels=0x" << std::hex
+                           << std::uppercase << description.ChannelMapping
+                           << L", color=0x" << description.Color << std::dec
+                           << L", connection=" << static_cast<UINT32>(description.ConnectionType)
+                           << L", geo=" << static_cast<UINT32>(description.GeoLocation)
+                           << L", general=" << static_cast<UINT32>(description.GenLocation)
+                           << L", port=" << static_cast<UINT32>(description.PortConnection)
+                           << L", connected=" << (description.IsConnected ? L"yes" : L"no")
+                           << L"\n";
+            }
+        }
+    } else {
+        std::wcout << L"    IKsJackDescription: " << HResultText(jackResult) << L"\n";
+    }
+
+    ComPtr<IKsJackSinkInformation> sinkInformation;
+    const HRESULT sinkResult = part->Activate(
+        CLSCTX_ALL, __uuidof(IKsJackSinkInformation),
+        reinterpret_cast<void**>(sinkInformation.GetAddressOf()));
+    if (SUCCEEDED(sinkResult)) {
+        KSJACK_SINK_INFORMATION sink{};
+        const HRESULT informationResult = sinkInformation->GetJackSinkInformation(&sink);
+        if (SUCCEEDED(informationResult)) {
+            std::wcout << L"    sink: connection=" << static_cast<UINT32>(sink.ConnType)
+                       << L", manufacturer=0x" << std::hex << std::uppercase
+                       << sink.ManufacturerId << L", product=0x" << sink.ProductId
+                       << std::dec << L", latency=" << sink.AudioLatency
+                       << L" ms, HDCP=" << (sink.HDCPCapable ? L"yes" : L"no")
+                       << L", AI=" << (sink.AICapable ? L"yes" : L"no") << L"\n"
+                       << L"      description: " << sink.SinkDescription << L"\n"
+                       << L"      port LUID: 0x" << std::hex << std::uppercase
+                       << static_cast<UINT32>(sink.PortId.HighPart) << L":"
+                       << sink.PortId.LowPart << std::dec << L"\n";
+        } else {
+            std::wcout << L"    GetJackSinkInformation: "
+                       << HResultText(informationResult) << L"\n";
+        }
+    } else {
+        std::wcout << L"    IKsJackSinkInformation: " << HResultText(sinkResult) << L"\n";
+    }
+}
+
+} // namespace
+
+void PrintEndpointJackInfo(const std::wstring& filter) {
+    const Endpoint endpoint = SelectEndpoint(filter);
+    std::wcout << L"Endpoint topology: " << endpoint.name << L"\n"
+               << L"ID: " << endpoint.id << L"\n";
+
+    ComPtr<IDeviceTopology> topology;
+    ThrowIfFailed(endpoint.device->Activate(__uuidof(IDeviceTopology), CLSCTX_ALL,
+                                             nullptr, &topology),
+                  "Activate endpoint device topology");
+
+    UINT connectorCount = 0;
+    ThrowIfFailed(topology->GetConnectorCount(&connectorCount), "Get topology connector count");
+    std::wcout << L"Connectors: " << connectorCount << L"\n";
+    for (UINT index = 0; index < connectorCount; ++index) {
+        ComPtr<IConnector> connector;
+        ThrowIfFailed(topology->GetConnector(index, &connector), "Get topology connector");
+        const std::wstring label = L"connector[" + std::to_wstring(index) + L"]";
+        PrintConnectorJackInfo(connector.Get(), label.c_str());
+
+        ComPtr<IConnector> peer;
+        if (SUCCEEDED(connector->GetConnectedTo(&peer))) {
+            const std::wstring peerLabel = label + L" peer";
+            PrintConnectorJackInfo(peer.Get(), peerLabel.c_str());
+        }
+    }
 }
 
 WAVEFORMATEXTENSIBLE MakePcmFormat(const WORD channels, const DWORD channelMask) {
@@ -475,6 +663,8 @@ void PrintEndpoint(const Endpoint& endpoint) {
     const auto ddp = MakeDolbyDigitalPlusFormat(kDolbyDigitalPlus);
     const auto ddpAtmos = MakeDolbyDigitalPlusFormat(kDolbyDigitalPlusAtmos);
     const auto mat10 = MakeIec61937Format(kDolbyMlpMat10);
+    auto mat10NoMask = mat10;
+    mat10NoMask.formatExt.dwChannelMask = 0;
     const auto mat20_legacy =
         MakeIec61937Format(kDolbyMat20, 48000, KSAUDIO_SPEAKER_7POINT1);
     const auto mat20_48 = MakeIec61937Format(kDolbyMat20, 48000);
@@ -494,6 +684,8 @@ void PrintEndpoint(const Endpoint& endpoint) {
     PrintFormatProbe(client.Get(), L"Dolby Digital Plus", &ddp.formatExt.Format);
     PrintFormatProbe(client.Get(), L"Dolby Atmos (DD+)", &ddpAtmos.formatExt.Format);
     PrintFormatProbe(client.Get(), L"Dolby MLP / MAT 1.0", &mat10.formatExt.Format);
+    PrintFormatProbe(client.Get(), L"Dolby MLP / MAT 1.0 / no channel mask",
+                     &mat10NoMask.formatExt.Format);
     PrintFormatProbe(client.Get(), L"Dolby MAT 2.0 / legacy 7.1 mask",
                      &mat20_legacy.formatExt.Format);
     PrintFormatProbe(client.Get(), L"Dolby MAT 2.0 / 7.1 surround mask",

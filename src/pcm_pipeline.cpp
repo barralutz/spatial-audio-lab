@@ -185,8 +185,7 @@ void PlayLivePcmLayout(const double seconds,
             const std::uint64_t queuedForAll = renderer.MinimumFramesAvailable(queue);
             if (!renderer.IsStarted() &&
                 (queuedForAll >= prebufferFrames || (!acceptingInput && queuedForAll != 0))) {
-                renderer.Prime(queue);
-                renderer.Start();
+                renderer.PrimeAndStart(queue);
             }
 
             if (renderer.IsStarted()) {

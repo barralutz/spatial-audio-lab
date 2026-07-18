@@ -70,6 +70,7 @@ public:
 
     void Prime(const InterleavedPcmQueue& queue);
     void Start();
+    void PrimeAndStart(const InterleavedPcmQueue& queue);
     void Service(const InterleavedPcmQueue& queue,
                  bool countStarvation,
                  DWORD timeoutMilliseconds = 2);
@@ -84,6 +85,11 @@ public:
     std::vector<EndpointRenderStats> Stats() const;
 
 private:
+    void RecoverPhysicalOutputs(const InterleavedPcmQueue& queue,
+                                HRESULT failure,
+                                const std::vector<double>& sourcePositions,
+                                std::wstring_view stage);
+
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

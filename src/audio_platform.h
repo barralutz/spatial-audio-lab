@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <audioclient.h>
+#include <devicetopology.h>
 #include <ks.h>
 #include <ksmedia.h>
 #include <mmdeviceapi.h>
@@ -97,9 +98,20 @@ struct Endpoint {
     bool isDefault{};
 };
 
+class AudioClientError : public std::runtime_error {
+public:
+    AudioClientError(HRESULT result, const char* operation);
+
+    HRESULT Result() const noexcept { return result_; }
+
+private:
+    HRESULT result_;
+};
+
 std::wstring HResultText(HRESULT result);
 std::wstring GuidText(const GUID& guid);
 void ThrowIfFailed(HRESULT result, const char* operation);
+bool IsRecoverableAudioClientError(HRESULT result);
 std::wstring Lowercase(std::wstring value);
 std::wstring WaveFormatText(const WAVEFORMATEX* format);
 double Decibels(double linear);
@@ -109,8 +121,10 @@ Endpoint SelectEndpoint(const std::wstring& filter);
 void SetDefaultEndpoint(const std::wstring& filter);
 void SetNativePcm714Format(const std::wstring& filter);
 void SetSpatialCodecFormat(const std::wstring& filter, bool dtsX);
+void SetLegacyMatFormat(const std::wstring& filter);
 void PrintConfiguredFormats(const std::wstring& filter);
 void PrintEndpoint(const Endpoint& endpoint);
+void PrintEndpointJackInfo(const std::wstring& filter);
 
 WAVEFORMATEXTENSIBLE MakePcmFormat(WORD channels, DWORD channelMask);
 Iec61937WaveFormat MakeIec61937Format(

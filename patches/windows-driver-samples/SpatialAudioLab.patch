@@ -1,3 +1,58 @@
+diff --git a/audio/sysvad/EndpointsCommon/minwavert.cpp b/audio/sysvad/EndpointsCommon/minwavert.cpp
+index c6b8e8c..99ba02d 100644
+--- a/audio/sysvad/EndpointsCommon/minwavert.cpp
++++ b/audio/sysvad/EndpointsCommon/minwavert.cpp
+@@ -24,6 +24,7 @@ Abstract:
+ #include "minwavertstream.h"
+ #include "IHVPrivatePropertySet.h"
+ #include "AudioModuleHelper.h"
++#include "matcapture.h"
+ 
+ 
+ #define EFFECTS_LIST_COUNT 2
+@@ -746,6 +747,13 @@ Return Value:
+     {
+         stream->Release();
+     }
++
++    MatCaptureRecordFormatEvent(
++        MatCaptureFormatEventNewStream,
++        Pin,
++        Capture,
++        ntStatus,
++        DataFormat);
+     
+     return ntStatus;
+ } // NewStream
+@@ -1466,7 +1474,14 @@ CMiniportWaveRT::IsFormatSupported
+ 
+     if (_ulPin >= m_pMiniportPair->WaveDescriptor->PinCount)
+     {
+-        return STATUS_INVALID_PARAMETER;
++        ntStatus = STATUS_INVALID_PARAMETER;
++        MatCaptureRecordFormatEvent(
++            MatCaptureFormatEventIsFormatSupported,
++            _ulPin,
++            _bCapture,
++            ntStatus,
++            _pDataFormat);
++        return ntStatus;
+     }
+ 
+     cPinFormats = GetPinSupportedDeviceFormats(_ulPin, &pPinFormats);
+@@ -1510,6 +1525,12 @@ CMiniportWaveRT::IsFormatSupported
+         break;
+     }
+ 
++    MatCaptureRecordFormatEvent(
++        MatCaptureFormatEventIsFormatSupported,
++        _ulPin,
++        _bCapture,
++        ntStatus,
++        _pDataFormat);
+     return ntStatus;
+ }
+ 
 diff --git a/audio/sysvad/EndpointsCommon/minwavertstream.cpp b/audio/sysvad/EndpointsCommon/minwavertstream.cpp
 index adea0c8..e85cb22 100644
 --- a/audio/sysvad/EndpointsCommon/minwavertstream.cpp
@@ -92,8 +147,57 @@ index a37a16b..fc040ca 100644
 -</Project>
 \ No newline at end of file
 +</Project>
+diff --git a/audio/sysvad/TabletAudioSample/hdmitopo.cpp b/audio/sysvad/TabletAudioSample/hdmitopo.cpp
+index d187f46..292935f 100644
+--- a/audio/sysvad/TabletAudioSample/hdmitopo.cpp
++++ b/audio/sysvad/TabletAudioSample/hdmitopo.cpp
+@@ -314,7 +314,7 @@ Return Value:
+ 
+ //=============================================================================
+ 
+-#define SINK_DESC_STR L"SinkDescription Sample"
++#define SINK_DESC_STR L"1 - HISENSE"
+ 
+ NTSTATUS
+ CHdmiMiniportTopology::PropertyHandlerJackSinkInfo
+@@ -389,11 +389,14 @@ Return Value:
+                         // Init sink info data (example follows).
+                         //
+                         sinkInfo->ConnType              = KSJACK_SINK_CONNECTIONTYPE_HDMI;
+-                        sinkInfo->ManufacturerId        = 0;
+-                        sinkInfo->ProductId             = 0;
++                        // Match the validated HISENSE Atmos endpoint used by this virtual sink.
++                        sinkInfo->ManufacturerId        = 0xA320;
++                        sinkInfo->ProductId             = 0x0030;
+                         sinkInfo->AudioLatency          = 0;
+                         sinkInfo->HDCPCapable           = TRUE;
+-                        sinkInfo->AICapable             = TRUE;
++                        sinkInfo->AICapable             = FALSE;
++                        sinkInfo->PortId.HighPart       = static_cast<LONG>(0x8C2242F7u);
++                        sinkInfo->PortId.LowPart        = 0xF30FD0AE;
+                         
+                         cchLength = sizeof(SINK_DESC_STR)/sizeof(WCHAR) - 1; // -1 to remove the null wchar.
+                         if (cchLength < MAX_SINK_DESCRIPTION_NAME_LENGTH)
+diff --git a/audio/sysvad/TabletAudioSample/hdmitoptable.h b/audio/sysvad/TabletAudioSample/hdmitoptable.h
+index c360d79..0d02bac 100644
+--- a/audio/sysvad/TabletAudioSample/hdmitoptable.h
++++ b/audio/sysvad/TabletAudioSample/hdmitoptable.h
+@@ -165,11 +165,11 @@ PCPIN_DESCRIPTOR HdmiTopoMiniportPins[] =
+ static
+ KSJACK_DESCRIPTION HdmiJackDesc =
+ {
+-    KSAUDIO_SPEAKER_STEREO,
++    KSAUDIO_SPEAKER_7POINT1_SURROUND,
+     0x0000,               // no color
+     eConnTypeOtherDigital,
+     eGeoLocHDMI,
+-    eGenLocPrimaryBox,
++    eGenLocSeparate,
+     ePortConnJack,
+     TRUE
+ };
 diff --git a/audio/sysvad/TabletAudioSample/hdmiwavtable.h b/audio/sysvad/TabletAudioSample/hdmiwavtable.h
-index bd0f923..a2e0c6f 100644
+index bd0f923..2318766 100644
 --- a/audio/sysvad/TabletAudioSample/hdmiwavtable.h
 +++ b/audio/sysvad/TabletAudioSample/hdmiwavtable.h
 @@ -24,14 +24,16 @@ Abstract:
@@ -198,7 +302,39 @@ index bd0f923..a2e0c6f 100644
      { // 4
          {
              sizeof(KSDATAFORMAT_WAVEFORMATEXTENSIBLE),
-@@ -422,6 +499,131 @@ KSDATAFORMAT_WAVEFORMATEXTENSIBLE HdmiHostPinSupportedDeviceFormats[] =
+@@ -273,6 +350,31 @@ KSDATAFORMAT_WAVEFORMATEXTENSIBLE HdmiHostPinSupportedDeviceFormats[] =
+             STATICGUIDOF(KSDATAFORMAT_SUBTYPE_IEC61937_DOLBY_MLP)
+         }
+     },
++    { // Dolby MLP / MAT 1.0 without a channel mask, as requested by Battlefield 1
++        {
++            sizeof(KSDATAFORMAT_WAVEFORMATEXTENSIBLE),
++            0,
++            0,
++            0,
++            STATICGUIDOF(KSDATAFORMAT_TYPE_AUDIO),
++            STATICGUIDOF(KSDATAFORMAT_SUBTYPE_IEC61937_DOLBY_MLP),
++            STATICGUIDOF(KSDATAFORMAT_SPECIFIER_WAVEFORMATEX)
++        },
++        {
++            {
++                WAVE_FORMAT_EXTENSIBLE,
++                8,
++                192000,
++                3072000,
++                16,
++                16,
++                sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)
++            },
++            16,
++            0,
++            STATICGUIDOF(KSDATAFORMAT_SUBTYPE_IEC61937_DOLBY_MLP)
++        }
++    },
+     { // 8
+         {
+             sizeof(KSDATAFORMAT_WAVEFORMATEXTENSIBLE),
+@@ -422,6 +524,131 @@ KSDATAFORMAT_WAVEFORMATEXTENSIBLE HdmiHostPinSupportedDeviceFormats[] =
              KSAUDIO_SPEAKER_7POINT1,
              STATICGUIDOF(KSDATAFORMAT_SUBTYPE_IEC61937_DOLBY_MAT21)
          }
@@ -390,17 +526,18 @@ index 1334411..6f5d150 100644
          newRelations = (PDEVICE_RELATIONS)(Irp->IoStatus.Information);
          goto Exit;
 diff --git a/audio/sysvad/matcapture.cpp b/audio/sysvad/matcapture.cpp
-new file mode 100644
-index 0000000..69afa40
+new file mode 100755
+index 0000000..0e92e4b
 --- /dev/null
 +++ b/audio/sysvad/matcapture.cpp
-@@ -0,0 +1,393 @@
+@@ -0,0 +1,510 @@
 +#include <sysvad.h>
 +#include <wdmsec.h>
 +#include "matcapture.h"
 +
 +#define MAT_CAPTURE_POOLTAG 'rCtM'
 +#define MAT_CAPTURE_CAPACITY (4U * 1024U * 1024U)
++#define MAT_CAPTURE_FORMAT_EVENT_CAPACITY 512U
 +
 +namespace
 +{
@@ -425,6 +562,8 @@ index 0000000..69afa40
 +    USHORT g_BitsPerSample = 0;
 +    USHORT g_ValidBitsPerSample = 0;
 +    USHORT g_BlockAlign = 0;
++    MAT_CAPTURE_FORMAT_EVENT g_FormatEvents[MAT_CAPTURE_FORMAT_EVENT_CAPACITY] = {};
++    ULONGLONG g_TotalFormatRecords = 0;
 +
 +    bool IsCapturedFormat(_In_ const WAVEFORMATEXTENSIBLE* Format)
 +    {
@@ -615,6 +754,64 @@ index 0000000..69afa40
 +        return CompleteIrp(Irp, STATUS_SUCCESS, 0);
 +    }
 +
++    NTSTATUS GetFormatLog(_In_ PIRP Irp, _In_ ULONG OutputBytes)
++    {
++        const ULONG headerBytes = sizeof(MAT_CAPTURE_FORMAT_LOG);
++        if (OutputBytes < headerBytes || Irp->AssociatedIrp.SystemBuffer == nullptr)
++        {
++            return CompleteIrp(Irp, STATUS_BUFFER_TOO_SMALL, headerBytes);
++        }
++
++        auto log = static_cast<PMAT_CAPTURE_FORMAT_LOG>(Irp->AssociatedIrp.SystemBuffer);
++        auto records = reinterpret_cast<PMAT_CAPTURE_FORMAT_EVENT>(
++            reinterpret_cast<BYTE*>(log) + headerBytes);
++        const ULONG outputRecordCapacity =
++            (OutputBytes - headerBytes) / sizeof(MAT_CAPTURE_FORMAT_EVENT);
++
++        KIRQL oldIrql;
++        KeAcquireSpinLock(&g_Lock, &oldIrql);
++        const ULONGLONG retained64 = min(
++            g_TotalFormatRecords,
++            static_cast<ULONGLONG>(MAT_CAPTURE_FORMAT_EVENT_CAPACITY));
++        const ULONG retained = static_cast<ULONG>(retained64);
++        const ULONG recordCount = min(retained, outputRecordCapacity);
++        const ULONGLONG firstSequence =
++            recordCount == 0 ? 0 : g_TotalFormatRecords - recordCount + 1;
++
++        log->Version = MAT_CAPTURE_FORMAT_LOG_VERSION;
++        log->HeaderBytes = headerBytes;
++        log->RecordBytes = sizeof(MAT_CAPTURE_FORMAT_EVENT);
++        log->RecordCount = recordCount;
++        log->FirstSequence = firstSequence;
++        log->TotalRecords = g_TotalFormatRecords;
++        log->DroppedRecords = g_TotalFormatRecords > MAT_CAPTURE_FORMAT_EVENT_CAPACITY
++            ? g_TotalFormatRecords - MAT_CAPTURE_FORMAT_EVENT_CAPACITY
++            : 0;
++
++        for (ULONG index = 0; index < recordCount; ++index)
++        {
++            const ULONGLONG sequence = firstSequence + index;
++            records[index] = g_FormatEvents[
++                static_cast<ULONG>((sequence - 1) % MAT_CAPTURE_FORMAT_EVENT_CAPACITY)];
++        }
++        KeReleaseSpinLock(&g_Lock, oldIrql);
++
++        return CompleteIrp(
++            Irp,
++            STATUS_SUCCESS,
++            headerBytes + recordCount * sizeof(MAT_CAPTURE_FORMAT_EVENT));
++    }
++
++    NTSTATUS ResetFormatLog(_In_ PIRP Irp)
++    {
++        KIRQL oldIrql;
++        KeAcquireSpinLock(&g_Lock, &oldIrql);
++        g_TotalFormatRecords = 0;
++        RtlZeroMemory(g_FormatEvents, sizeof(g_FormatEvents));
++        KeReleaseSpinLock(&g_Lock, oldIrql);
++        return CompleteIrp(Irp, STATUS_SUCCESS, 0);
++    }
++
 +    NTSTATUS DispatchDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Irp)
 +    {
 +        if (DeviceObject != g_ControlDevice)
@@ -635,6 +832,10 @@ index 0000000..69afa40
 +            return GetCaptureStats(Irp, stack->Parameters.DeviceIoControl.OutputBufferLength);
 +        case IOCTL_MAT_CAPTURE_RESET:
 +            return ResetCapture(Irp);
++        case IOCTL_MAT_CAPTURE_GET_FORMAT_LOG:
++            return GetFormatLog(Irp, stack->Parameters.DeviceIoControl.OutputBufferLength);
++        case IOCTL_MAT_CAPTURE_RESET_FORMAT_LOG:
++            return ResetFormatLog(Irp);
 +        default:
 +            return CompleteIrp(Irp, STATUS_INVALID_DEVICE_REQUEST, 0);
 +        }
@@ -788,12 +989,64 @@ index 0000000..69afa40
 +    g_WriteSequence = newWriteSequence;
 +    KeReleaseSpinLock(&g_Lock, oldIrql);
 +}
++
++VOID MatCaptureRecordFormatEvent(
++    _In_ MAT_CAPTURE_FORMAT_EVENT_TYPE Type,
++    _In_ ULONG Pin,
++    _In_ BOOLEAN Capture,
++    _In_ NTSTATUS Status,
++    _In_opt_ const KSDATAFORMAT* Format)
++{
++    MAT_CAPTURE_FORMAT_EVENT event = {};
++    event.InterruptTime100ns = KeQueryInterruptTime();
++    event.Type = Type;
++    event.Pin = Pin;
++    event.Status = Status;
++    event.Capture = Capture ? 1U : 0U;
++
++    if (Format != nullptr)
++    {
++        event.MajorFormat = Format->MajorFormat;
++        event.DataSubFormat = Format->SubFormat;
++        event.Specifier = Format->Specifier;
++        event.FormatSize = Format->FormatSize;
++
++        const ULONG waveOffset = sizeof(KSDATAFORMAT);
++        if (Format->FormatSize >= waveOffset + sizeof(WAVEFORMATEX))
++        {
++            const auto wave = reinterpret_cast<const WAVEFORMATEX*>(Format + 1);
++            event.FormatTag = wave->wFormatTag;
++            event.Channels = wave->nChannels;
++            event.SampleRate = wave->nSamplesPerSec;
++            event.AverageBytesPerSecond = wave->nAvgBytesPerSec;
++            event.BlockAlign = wave->nBlockAlign;
++            event.BitsPerSample = wave->wBitsPerSample;
++            event.ExtraSize = wave->cbSize;
++
++            if (wave->wFormatTag == WAVE_FORMAT_EXTENSIBLE &&
++                Format->FormatSize >= waveOffset + sizeof(WAVEFORMATEXTENSIBLE))
++            {
++                const auto extensible = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(wave);
++                event.ValidBitsPerSample = extensible->Samples.wValidBitsPerSample;
++                event.ChannelMask = extensible->dwChannelMask;
++                event.WaveSubFormat = extensible->SubFormat;
++            }
++        }
++    }
++
++    KIRQL oldIrql;
++    KeAcquireSpinLock(&g_Lock, &oldIrql);
++    event.Sequence = ++g_TotalFormatRecords;
++    g_FormatEvents[static_cast<ULONG>(
++        (event.Sequence - 1) % MAT_CAPTURE_FORMAT_EVENT_CAPACITY)] = event;
++    KeReleaseSpinLock(&g_Lock, oldIrql);
++}
 diff --git a/audio/sysvad/matcapture.h b/audio/sysvad/matcapture.h
-new file mode 100644
-index 0000000..7c044cd
+new file mode 100755
+index 0000000..c1fd725
 --- /dev/null
 +++ b/audio/sysvad/matcapture.h
-@@ -0,0 +1,68 @@
+@@ -0,0 +1,125 @@
 +#pragma once
 +
 +#include <devioctl.h>
@@ -808,6 +1061,55 @@ index 0000000..7c044cd
 +    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_BUFFERED, FILE_READ_ACCESS)
 +#define IOCTL_MAT_CAPTURE_RESET \
 +    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x802, METHOD_BUFFERED, FILE_WRITE_ACCESS)
++#define IOCTL_MAT_CAPTURE_GET_FORMAT_LOG \
++    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x803, METHOD_BUFFERED, FILE_READ_ACCESS)
++#define IOCTL_MAT_CAPTURE_RESET_FORMAT_LOG \
++    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x804, METHOD_BUFFERED, FILE_WRITE_ACCESS)
++
++#define MAT_CAPTURE_FORMAT_LOG_VERSION 1U
++
++typedef enum _MAT_CAPTURE_FORMAT_EVENT_TYPE
++{
++    MatCaptureFormatEventIsFormatSupported = 1,
++    MatCaptureFormatEventNewStream = 2
++} MAT_CAPTURE_FORMAT_EVENT_TYPE;
++
++typedef struct _MAT_CAPTURE_FORMAT_EVENT
++{
++    ULONGLONG Sequence;
++    ULONGLONG InterruptTime100ns;
++    ULONG ProcessId;
++    ULONG ThreadId;
++    ULONG Type;
++    ULONG Pin;
++    LONG Status;
++    ULONG Capture;
++    GUID MajorFormat;
++    GUID DataSubFormat;
++    GUID Specifier;
++    ULONG FormatSize;
++    USHORT FormatTag;
++    USHORT Channels;
++    ULONG SampleRate;
++    ULONG AverageBytesPerSecond;
++    USHORT BlockAlign;
++    USHORT BitsPerSample;
++    USHORT ExtraSize;
++    USHORT ValidBitsPerSample;
++    ULONG ChannelMask;
++    GUID WaveSubFormat;
++} MAT_CAPTURE_FORMAT_EVENT, *PMAT_CAPTURE_FORMAT_EVENT;
++
++typedef struct _MAT_CAPTURE_FORMAT_LOG
++{
++    ULONG Version;
++    ULONG HeaderBytes;
++    ULONG RecordBytes;
++    ULONG RecordCount;
++    ULONGLONG FirstSequence;
++    ULONGLONG TotalRecords;
++    ULONGLONG DroppedRecords;
++} MAT_CAPTURE_FORMAT_LOG, *PMAT_CAPTURE_FORMAT_LOG;
 +
 +typedef struct _MAT_CAPTURE_READ_HEADER
 +{
@@ -860,5 +1162,13 @@ index 0000000..7c044cd
 +    _In_ const WAVEFORMATEXTENSIBLE* Format,
 +    _In_reads_bytes_(ByteCount) const BYTE* Data,
 +    _In_ ULONG ByteCount);
++
++_IRQL_requires_max_(DISPATCH_LEVEL)
++VOID MatCaptureRecordFormatEvent(
++    _In_ MAT_CAPTURE_FORMAT_EVENT_TYPE Type,
++    _In_ ULONG Pin,
++    _In_ BOOLEAN Capture,
++    _In_ NTSTATUS Status,
++    _In_opt_ const KSDATAFORMAT* Format);
 +
 +#endif

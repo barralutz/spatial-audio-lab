@@ -839,7 +839,7 @@ public:
     explicit DtsXSpatialDecoder(const SpeakerLayout& layout) : layout_(layout) {
         decoder_ = ActivateAudioDecoder(
             L"DTSXDecoder", &kDtsXRawSubtype, &MFAudioFormat_Float_SpatialObjects);
-        const Endpoint endpoint = SelectEndpoint(L"SinkDescription Sample");
+        const Endpoint endpoint = SelectEndpoint(L"1 - HISENSE (Virtual Audio Device");
 
         PROPVARIANT metadataActivation;
         PropVariantInit(&metadataActivation);
@@ -1321,7 +1321,7 @@ void ProbeDtsXDecode(const std::filesystem::path& inputPath, const std::size_t m
         : &MFAudioFormat_PCM;
     auto decoder = ActivateAudioDecoder(L"DTSXDecoder", &kDtsXRawSubtype, requestedOutput);
 
-    const Endpoint endpoint = SelectEndpoint(L"SinkDescription Sample");
+    const Endpoint endpoint = SelectEndpoint(L"1 - HISENSE (Virtual Audio Device");
     ComPtr<ISpatialAudioMetadataClient> metadataClient;
     if (outputMode == DtsXDecodeOutput::SpatialObjects) {
         PROPVARIANT metadataActivation;
@@ -1654,8 +1654,7 @@ void PlayLiveDtsXLayout(const double seconds,
             const std::uint64_t queuedForAll = renderer.MinimumFramesAvailable(queue);
             if (!renderer.IsStarted() &&
                 (queuedForAll >= prebufferFrames || (decoderDrained && queuedForAll != 0))) {
-                renderer.Prime(queue);
-                renderer.Start();
+                renderer.PrimeAndStart(queue);
             }
 
             if (renderer.IsStarted()) {
