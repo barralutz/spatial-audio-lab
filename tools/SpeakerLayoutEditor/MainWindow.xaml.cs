@@ -151,10 +151,16 @@ public partial class MainWindow : Window {
             activeEndpoints.Sort((first, second) =>
                 StringComparer.CurrentCultureIgnoreCase.Compare(first.Name, second.Name));
             RebuildEndpointChoices();
-            StatusText.Text = $"{activeEndpoints.Count} endpoints activos";
+            StatusText.Text = document is null
+                ? $"Se requiere la configuracion inicial de parlantes · " +
+                  $"{activeEndpoints.Count} endpoints activos"
+                : $"{activeEndpoints.Count} endpoints activos";
         } catch (Exception error) {
             RebuildEndpointChoices();
-            StatusText.Text = $"No se pudieron actualizar los endpoints: {error.Message}";
+            StatusText.Text = document is null
+                ? "Se requiere la configuracion inicial de parlantes · " +
+                  $"No se pudieron actualizar los endpoints: {error.Message}"
+                : $"No se pudieron actualizar los endpoints: {error.Message}";
         } finally {
             RefreshEndpointsButton.IsEnabled = true;
         }
