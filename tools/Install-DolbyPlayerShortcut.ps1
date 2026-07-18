@@ -3,7 +3,8 @@ param()
 
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $launcher = Join-Path $PSScriptRoot 'Launch-DolbyPlayer.ps1'
-$player = Join-Path $PSScriptRoot 'DolbyPlayer\bin\Release\net8.0-windows\SpatialAudioLab.Cinema.exe'
+$applicationRoot = Join-Path $repoRoot 'build\SpatialAudioLab'
+$player = Join-Path $applicationRoot 'SpatialAudioLab.Cinema.exe'
 $mpv = Join-Path $env:ProgramFiles 'MPV Player\mpv.exe'
 $desktop = [Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory)
 $shortcutPath = Join-Path $desktop 'SpatialAudioLab Cinema.lnk'
@@ -11,7 +12,7 @@ $legacyShortcutPath = Join-Path $desktop 'DolbyPlayer Atmos 7.1.4.lnk'
 $powershell = Join-Path $PSHOME 'powershell.exe'
 
 if (-not (Test-Path $launcher)) { throw "Launcher not found: $launcher" }
-if (-not (Test-Path $player)) { & (Join-Path $PSScriptRoot 'Build-DolbyPlayer.ps1') }
+& (Join-Path $PSScriptRoot 'Publish-SpatialAudioLabCinema.ps1') -Destination $applicationRoot
 
 $shell = New-Object -ComObject WScript.Shell
 $shortcut = $shell.CreateShortcut($shortcutPath)

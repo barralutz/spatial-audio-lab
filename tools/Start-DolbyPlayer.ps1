@@ -24,10 +24,17 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$player = Join-Path $PSScriptRoot 'DolbyPlayer\bin\Release\net8.0-windows\SpatialAudioLab.Cinema.exe'
-$trueHdBinary = Join-Path $PSScriptRoot 'truehdd\truehd-stream.exe'
-if (-not (Test-Path $player) -or -not (Test-Path $trueHdBinary)) {
-    & (Join-Path $PSScriptRoot 'Build-DolbyPlayer.ps1')
+$repoRoot = Split-Path $PSScriptRoot -Parent
+$applicationRoot = Join-Path $repoRoot 'build\SpatialAudioLab'
+$player = Join-Path $applicationRoot 'SpatialAudioLab.Cinema.exe'
+$requiredApplicationFiles = @(
+    $player,
+    (Join-Path $applicationRoot 'Tools\ffmpeg\bin\ffprobe.exe'),
+    (Join-Path $applicationRoot 'Tools\mpv\mpv.exe'),
+    (Join-Path $applicationRoot 'Tools\truehdd\truehd-stream.exe')
+)
+if (@($requiredApplicationFiles | Where-Object { -not (Test-Path -LiteralPath $_) }).Count -ne 0) {
+    & (Join-Path $PSScriptRoot 'Publish-SpatialAudioLabCinema.ps1') -Destination $applicationRoot
 }
 if (-not $SkipBridgeSetup) {
     & (Join-Path $PSScriptRoot 'Ensure-LivePcm714.ps1')
