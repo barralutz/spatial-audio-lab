@@ -145,6 +145,18 @@ std::wstring ReadStringProperty(IPropertyStore* properties, const PROPERTYKEY& k
     return output;
 }
 
+std::wstring ReadGuidProperty(IPropertyStore* properties, const PROPERTYKEY& key) {
+    PROPVARIANT value;
+    PropVariantInit(&value);
+    const HRESULT result = properties->GetValue(key, &value);
+    std::wstring output;
+    if (SUCCEEDED(result) && value.vt == VT_CLSID && value.puuid != nullptr) {
+        output = GuidText(*value.puuid);
+    }
+    PropVariantClear(&value);
+    return output;
+}
+
 bool ReadUintProperty(IPropertyStore* properties, const PROPERTYKEY& key, UINT32& output) {
     PROPVARIANT value;
     PropVariantInit(&value);
@@ -158,7 +170,51 @@ bool ReadUintProperty(IPropertyStore* properties, const PROPERTYKEY& key, UINT32
     return false;
 }
 
-std::vector<Endpoint> EnumerateRenderEndpoints() {
+std::vector<unsigned> ProbeExclusivePcm48k(IMMDevice* device) {
+    struct ChannelFormat {
+        WORD channels;
+        DWORD mask;
+    };
+    constexpr ChannelFormat formats[] = {
+        {1, 0x00000004},
+        {2, 0x00000003},
+        {3, 0x0000000B},
+        {4, 0x00000033},
+        {5, 0x0000003B},
+        {6, KSAUDIO_SPEAKER_5POINT1},
+        {7, 0x0000070F},
+        {8, KSAUDIO_SPEAKER_7POINT1_SURROUND},
+        {9, 0x00000E3F},
+        {10, 0x0000563F},
+        {11, 0x0000763F},
+        {12, 0x0002D63F},
+    };
+
+    ComPtr<IAudioClient> client;
+    if (FAILED(device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, &client))) {
+        return {};
+    }
+
+    std::vector<unsigned> supported;
+    for (const ChannelFormat candidate : formats) {
+        WAVEFORMATEXTENSIBLE format = MakePcmFormat(candidate.channels, candidate.mask);
+        bool exact = client->IsFormatSupported(
+                         AUDCLNT_SHAREMODE_EXCLUSIVE, &format.Format, nullptr) == S_OK;
+        if (!exact) {
+            format.Format.wBitsPerSample = 16;
+            format.Format.nBlockAlign = static_cast<WORD>(candidate.channels * sizeof(std::int16_t));
+            format.Format.nAvgBytesPerSec =
+                format.Format.nSamplesPerSec * format.Format.nBlockAlign;
+            format.Samples.wValidBitsPerSample = 16;
+            exact = client->IsFormatSupported(
+                        AUDCLNT_SHAREMODE_EXCLUSIVE, &format.Format, nullptr) == S_OK;
+        }
+        if (exact) supported.push_back(candidate.channels);
+    }
+    return supported;
+}
+
+std::vector<Endpoint> EnumerateRenderEndpoints(const bool probePcmCapabilities) {
     ComPtr<IMMDeviceEnumerator> enumerator;
     ThrowIfFailed(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
                                    IID_PPV_ARGS(&enumerator)),
@@ -195,6 +251,13 @@ std::vector<Endpoint> EnumerateRenderEndpoints() {
         ThrowIfFailed(endpoint.device->OpenPropertyStore(STGM_READ, &properties),
                       "Open endpoint properties");
         endpoint.name = ReadStringProperty(properties.Get(), PKEY_Device_FriendlyName);
+        endpoint.containerId = ReadGuidProperty(properties.Get(), PKEY_Device_ContainerId);
+        if (probePcmCapabilities) {
+            endpoint.exclusivePcm48k = ProbeExclusivePcm48k(endpoint.device.Get());
+            if (!endpoint.exclusivePcm48k.empty()) {
+                endpoint.maximumChannels48k = endpoint.exclusivePcm48k.back();
+            }
+        }
         endpoints.push_back(std::move(endpoint));
     }
     return endpoints;

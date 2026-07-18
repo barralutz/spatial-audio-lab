@@ -95,7 +95,10 @@ struct Endpoint {
     ComPtr<IMMDevice> device;
     std::wstring id;
     std::wstring name;
+    std::wstring containerId;
     bool isDefault{};
+    unsigned maximumChannels48k{};
+    std::vector<unsigned> exclusivePcm48k;
 };
 
 class AudioClientError : public std::runtime_error {
@@ -116,7 +119,7 @@ std::wstring Lowercase(std::wstring value);
 std::wstring WaveFormatText(const WAVEFORMATEX* format);
 double Decibels(double linear);
 
-std::vector<Endpoint> EnumerateRenderEndpoints();
+std::vector<Endpoint> EnumerateRenderEndpoints(bool probePcmCapabilities = false);
 Endpoint SelectEndpoint(const std::wstring& filter);
 void SetDefaultEndpoint(const std::wstring& filter);
 void SetNativePcm714Format(const std::wstring& filter);

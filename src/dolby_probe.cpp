@@ -5,7 +5,9 @@
 #include "speaker_layout.h"
 
 #include <filesystem>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 
@@ -25,10 +27,57 @@ std::string Utf8(const std::wstring& value) {
     return result;
 }
 
+std::string JsonString(const std::wstring& value) {
+    const std::string utf8 = Utf8(value);
+    std::ostringstream output;
+    output << '"';
+    for (const unsigned char character : utf8) {
+        switch (character) {
+        case '"': output << "\\\""; break;
+        case '\\': output << "\\\\"; break;
+        case '\b': output << "\\b"; break;
+        case '\f': output << "\\f"; break;
+        case '\n': output << "\\n"; break;
+        case '\r': output << "\\r"; break;
+        case '\t': output << "\\t"; break;
+        default:
+            if (character < 0x20) {
+                output << "\\u" << std::hex << std::uppercase << std::setw(4)
+                       << std::setfill('0') << static_cast<unsigned>(character)
+                       << std::dec << std::nouppercase;
+            } else {
+                output << static_cast<char>(character);
+            }
+        }
+    }
+    output << '"';
+    return output.str();
+}
+
+void PrintEndpointJson(const Endpoint& endpoint) {
+    std::cout << "{\"id\":" << JsonString(endpoint.id)
+              << ",\"name\":" << JsonString(endpoint.name)
+              << ",\"containerId\":";
+    if (endpoint.containerId.empty()) {
+        std::cout << "null";
+    } else {
+        std::cout << JsonString(endpoint.containerId);
+    }
+    std::cout << ",\"isDefault\":" << (endpoint.isDefault ? "true" : "false")
+              << ",\"maximumChannels48k\":" << endpoint.maximumChannels48k
+              << ",\"exclusivePcm48k\":[";
+    for (std::size_t index = 0; index < endpoint.exclusivePcm48k.size(); ++index) {
+        if (index != 0) std::cout << ',';
+        std::cout << endpoint.exclusivePcm48k[index];
+    }
+    std::cout << "]}\n";
+}
+
 void PrintUsage() {
     std::wcout
         << L"SpatialAudioLab.CLI list\n"
         << L"SpatialAudioLab.CLI list-endpoints\n"
+        << L"SpatialAudioLab.CLI list-endpoints-json\n"
         << L"SpatialAudioLab.CLI set-default [endpoint-filter]\n"
         << L"SpatialAudioLab.CLI set-pcm714-format [endpoint-filter]\n"
         << L"SpatialAudioLab.CLI set-codec-format <atmos|mat10|dtsx> [endpoint-filter]\n"
@@ -96,6 +145,13 @@ int wmain(const int argc, wchar_t** argv) {
         if (command == L"list-endpoints") {
             for (const auto& endpoint : EnumerateRenderEndpoints()) {
                 std::cout << Utf8(endpoint.name) << '\t' << Utf8(endpoint.id) << '\n';
+            }
+            return 0;
+        }
+
+        if (command == L"list-endpoints-json") {
+            for (const auto& endpoint : EnumerateRenderEndpoints(true)) {
+                PrintEndpointJson(endpoint);
             }
             return 0;
         }
