@@ -3,7 +3,8 @@
 	url = https://github.com/microsoft/Windows-driver-samples.git
 [submodule "third_party/Cavern"]
 	path = third_party/Cavern
-	url = https://github.com/VoidXH/Cavern.git
+	url = https://github.com/barralutz/Cavern.git
+	branch = spatial-audio-lab
 [submodule "third_party/FFmpeg"]
 	path = third_party/FFmpeg
 	url = https://github.com/FFmpeg/FFmpeg.git
