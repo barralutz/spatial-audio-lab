@@ -54,7 +54,7 @@ index c6b8e8c..99ba02d 100644
  }
  
 diff --git a/audio/sysvad/EndpointsCommon/minwavertstream.cpp b/audio/sysvad/EndpointsCommon/minwavertstream.cpp
-index adea0c8..e85cb22 100644
+index adea0c8..7b7f403 100644
 --- a/audio/sysvad/EndpointsCommon/minwavertstream.cpp
 +++ b/audio/sysvad/EndpointsCommon/minwavertstream.cpp
 @@ -6,6 +6,7 @@
@@ -65,7 +65,138 @@ index adea0c8..e85cb22 100644
  #define MINWAVERTSTREAM_POOLTAG 'SRWM'
  
  #pragma warning (disable : 4127)
-@@ -1469,11 +1470,8 @@ VOID CMiniportWaveRTStream::UpdatePosition
+@@ -300,7 +301,15 @@ Return Value:
+     }
+     m_ulPin = Pin_;
+     m_bCapture = Capture_;
+-    m_ulDmaMovementRate = pWfEx->nAvgBytesPerSec;
++    // WaveRT advances through the transport buffer, not through the encoded
++    // payload. Some legacy MAT clients report an nAvgBytesPerSec value that is
++    // half the 8-channel HBR carrier rate. Derive the physical byte rate from
++    // the frame geometry so the simulated DMA clock cannot run at half speed.
++    const ULONGLONG transportBytesPerSecond =
++        static_cast<ULONGLONG>(pWfEx->nSamplesPerSec) * pWfEx->nBlockAlign;
++    m_ulDmaMovementRate = transportBytesPerSecond != 0 && transportBytesPerSecond <= MAXULONG
++        ? static_cast<ULONG>(transportBytesPerSecond)
++        : pWfEx->nAvgBytesPerSec;
+ 
+     m_pDpc = (PRKDPC)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(KDPC), MINWAVERTSTREAM_POOLTAG);
+     if (!m_pDpc)
+@@ -1011,59 +1020,55 @@ NTSTATUS CMiniportWaveRTStream::SetWritePacket
+ )
+ {
+     NTSTATUS ntStatus;
++    ULONG oldLastOsWritePacket = m_ulLastOsWritePacket;
+ 
+     // The call must be from event driven mode
+     if (m_ulNotificationsPerBuffer == 0)
+     {
+-        return STATUS_NOT_SUPPORTED;
++        ntStatus = STATUS_NOT_SUPPORTED;
++        MatCaptureRecordPacketEvent(
++            this, m_pWfExt, PacketNumber, oldLastOsWritePacket, m_KsState,
++            ntStatus, m_ulDmaBufferSize, m_ulNotificationsPerBuffer,
++            m_ulNotificationIntervalMs);
++        return ntStatus;
+     }
+ 
+-    ULONG oldLastOsWritePacket = m_ulLastOsWritePacket;
+-
+     // This function should not be called once EoS has been set.
+     if (m_bEoSReceived)
+     {
+-        return STATUS_INVALID_DEVICE_STATE;
++        ntStatus = STATUS_INVALID_DEVICE_STATE;
++        MatCaptureRecordPacketEvent(
++            this, m_pWfExt, PacketNumber, oldLastOsWritePacket, m_KsState,
++            ntStatus, m_ulDmaBufferSize, m_ulNotificationsPerBuffer,
++            m_ulNotificationIntervalMs);
++        return ntStatus;
+     }
+ 
+-    KIRQL oldIrql;
+-    KeAcquireSpinLock(&m_PositionSpinLock, &oldIrql);
+-    // 1-based count of completed packets, 0-based packet number of current packet
+-    LONGLONG currentPacket = m_llPacketCounter;
+-    KeReleaseSpinLock(&m_PositionSpinLock, oldIrql);
+-
+-    // If not running, the current packet hasn't actually started transfering so OS should be writing
+-    // to the current packet. If running, then the current packing is already transfering to hardware
+-    // so the OS should write the packet after the current packet.
+-    ULONG expectedPacket = LODWORD(currentPacket);
+-    if (m_KsState == KSSTATE_RUN)
+-    {
+-        expectedPacket++;
+-    }
+-
+-    // Check if OS PacketNumber is behind or too far ahead of current packet
+-    LONG deltaFromExpectedPacket = PacketNumber - expectedPacket;   // Modulo arithemetic
+-    if (deltaFromExpectedPacket < 0)
+-    {
+-        return STATUS_DATA_LATE_ERROR;
+-    }
+-    else if (deltaFromExpectedPacket > 0)
+-    {
+-        return STATUS_DATA_OVERRUN;
+-    }
++    // This software sink has no hardware DMA queue to overrun. PortCls owns
++    // packet scheduling and may legitimately skip a number after a startup
++    // glitch or discontinuity. Accept the packet it has committed instead of
++    // permanently rejecting every later packet relative to a stale counter.
+ 
+     ULONG packetSize = (m_ulDmaBufferSize / m_ulNotificationsPerBuffer);
+     ULONG packetIndex = PacketNumber % m_ulNotificationsPerBuffer;
+-    ULONG ulCurrentWritePosition = packetIndex * packetSize;
++    ULONG packetOffset = packetIndex * packetSize;
++    ULONG ulCurrentWritePosition = packetOffset;
++    ULONG committedBytes = packetSize;
+ 
+     // Check if EOS flag was passed
+     if (Flags & KSSTREAM_HEADER_OPTIONSF_ENDOFSTREAM)
+     {
+         if (EosPacketLength > packetSize)
+         {
+-            return STATUS_INVALID_PARAMETER;
++            ntStatus = STATUS_INVALID_PARAMETER;
++            MatCaptureRecordPacketEvent(
++                this, m_pWfExt, PacketNumber, oldLastOsWritePacket, m_KsState,
++                ntStatus, m_ulDmaBufferSize, m_ulNotificationsPerBuffer,
++                m_ulNotificationIntervalMs);
++            return ntStatus;
+         }
+         else {
++            committedBytes = EosPacketLength;
+             // EOS position will be after the total completed packets, plus the packet in progress,
+             // plus this EOS packet length
+             m_ulLastOsWritePacket = PacketNumber;
+@@ -1080,6 +1085,7 @@ NTSTATUS CMiniportWaveRTStream::SetWritePacket
+         // Will not return an error when the passed in parameter is 0.
+         // Will also check if this function was called with the same write position(in event mode only)
+         // Underruning will also be checked via timer mechanism
++        KIRQL oldIrql;
+         KeAcquireSpinLock(&m_PositionSpinLock, &oldIrql);
+         ntStatus = SetCurrentWritePositionInternal(ulCurrentWritePosition);
+         KeReleaseSpinLock(&m_PositionSpinLock, oldIrql);
+@@ -1089,6 +1095,18 @@ NTSTATUS CMiniportWaveRTStream::SetWritePacket
+     {
+         m_ulLastOsWritePacket = oldLastOsWritePacket;
+     }
++    else if (committedBytes != 0)
++    {
++        // Capture the packet after PortCls commits it. Reading only from the
++        // simulated DMA clock can otherwise copy stale circular-buffer data
++        // when a client submits a packet close to its playback deadline.
++        MatCaptureWrite(m_pWfExt, m_pDmaBuffer + packetOffset, committedBytes);
++    }
++
++    MatCaptureRecordPacketEvent(
++        this, m_pWfExt, PacketNumber, oldLastOsWritePacket, m_KsState,
++        ntStatus, m_ulDmaBufferSize, m_ulNotificationsPerBuffer,
++        m_ulNotificationIntervalMs);
+ 
+     return ntStatus;
+ }
+@@ -1469,11 +1487,8 @@ VOID CMiniportWaveRTStream::UpdatePosition
                                          0);
          }
  
@@ -79,12 +210,17 @@ index adea0c8..e85cb22 100644
      }
      
      // Increment the DMA position by the number of bytes displaced since the last
-@@ -1547,7 +1545,11 @@ ByteDisplacement - # of bytes to process.
+@@ -1547,7 +1562,16 @@ ByteDisplacement - # of bytes to process.
      while (ByteDisplacement > 0)
      {
          ULONG runWrite = min(ByteDisplacement, m_ulDmaBufferSize - bufferOffset);
 -        m_SaveData.WriteData(m_pDmaBuffer + bufferOffset, runWrite);
-+        MatCaptureWrite(m_pWfExt, m_pDmaBuffer + bufferOffset, runWrite);
++        // Event-driven streams are captured at SetWritePacket(), where packet
++        // ownership is unambiguous. Keep this path for legacy polling streams.
++        if (m_ulNotificationsPerBuffer == 0)
++        {
++            MatCaptureWrite(m_pWfExt, m_pDmaBuffer + bufferOffset, runWrite);
++        }
 +        if (!g_DoNotCreateDataFiles)
 +        {
 +            m_SaveData.WriteData(m_pDmaBuffer + bufferOffset, runWrite);
@@ -526,11 +662,11 @@ index 1334411..6f5d150 100644
          newRelations = (PDEVICE_RELATIONS)(Irp->IoStatus.Information);
          goto Exit;
 diff --git a/audio/sysvad/matcapture.cpp b/audio/sysvad/matcapture.cpp
-new file mode 100755
-index 0000000..0e92e4b
+new file mode 100644
+index 0000000..fea28ba
 --- /dev/null
 +++ b/audio/sysvad/matcapture.cpp
-@@ -0,0 +1,510 @@
+@@ -0,0 +1,551 @@
 +#include <sysvad.h>
 +#include <wdmsec.h>
 +#include "matcapture.h"
@@ -564,6 +700,16 @@ index 0000000..0e92e4b
 +    USHORT g_BlockAlign = 0;
 +    MAT_CAPTURE_FORMAT_EVENT g_FormatEvents[MAT_CAPTURE_FORMAT_EVENT_CAPACITY] = {};
 +    ULONGLONG g_TotalFormatRecords = 0;
++
++    void AppendFormatEvent(_Inout_ MAT_CAPTURE_FORMAT_EVENT* Event)
++    {
++        KIRQL oldIrql;
++        KeAcquireSpinLock(&g_Lock, &oldIrql);
++        Event->Sequence = ++g_TotalFormatRecords;
++        g_FormatEvents[static_cast<ULONG>(
++            (Event->Sequence - 1) % MAT_CAPTURE_FORMAT_EVENT_CAPACITY)] = *Event;
++        KeReleaseSpinLock(&g_Lock, oldIrql);
++    }
 +
 +    bool IsCapturedFormat(_In_ const WAVEFORMATEXTENSIBLE* Format)
 +    {
@@ -1034,19 +1180,50 @@ index 0000000..0e92e4b
 +        }
 +    }
 +
-+    KIRQL oldIrql;
-+    KeAcquireSpinLock(&g_Lock, &oldIrql);
-+    event.Sequence = ++g_TotalFormatRecords;
-+    g_FormatEvents[static_cast<ULONG>(
-+        (event.Sequence - 1) % MAT_CAPTURE_FORMAT_EVENT_CAPACITY)] = event;
-+    KeReleaseSpinLock(&g_Lock, oldIrql);
++    AppendFormatEvent(&event);
++}
++
++VOID MatCaptureRecordPacketEvent(
++    _In_ const VOID* Stream,
++    _In_ const WAVEFORMATEXTENSIBLE* Format,
++    _In_ ULONG PacketNumber,
++    _In_ ULONG LastPacketNumber,
++    _In_ KSSTATE State,
++    _In_ NTSTATUS Status,
++    _In_ ULONG DmaBufferSize,
++    _In_ ULONG NotificationCount,
++    _In_ ULONG NotificationIntervalMs)
++{
++    if (Format == nullptr || !IsCapturedFormat(Format))
++    {
++        return;
++    }
++
++    MAT_CAPTURE_FORMAT_EVENT event = {};
++    event.InterruptTime100ns = KeQueryInterruptTime();
++    event.ProcessId = PtrToUlong(Stream);
++    event.ThreadId = PtrToUlong(KeGetCurrentThread());
++    event.Type = MatCaptureFormatEventWritePacket;
++    event.Pin = PacketNumber;
++    event.Status = Status;
++    event.Capture = static_cast<ULONG>(State);
++    event.FormatSize = DmaBufferSize;
++    event.FormatTag = static_cast<USHORT>(LastPacketNumber & 0xFFFF);
++    event.Channels = static_cast<USHORT>((LastPacketNumber >> 16) & 0xFFFF);
++    event.SampleRate = NotificationIntervalMs;
++    event.AverageBytesPerSecond = NotificationCount == 0
++        ? 0
++        : DmaBufferSize / NotificationCount;
++    event.ChannelMask = NotificationCount;
++    event.WaveSubFormat = Format->SubFormat;
++    AppendFormatEvent(&event);
 +}
 diff --git a/audio/sysvad/matcapture.h b/audio/sysvad/matcapture.h
-new file mode 100755
-index 0000000..c1fd725
+new file mode 100644
+index 0000000..aaaf6c8
 --- /dev/null
 +++ b/audio/sysvad/matcapture.h
-@@ -0,0 +1,125 @@
+@@ -0,0 +1,138 @@
 +#pragma once
 +
 +#include <devioctl.h>
@@ -1071,7 +1248,8 @@ index 0000000..c1fd725
 +typedef enum _MAT_CAPTURE_FORMAT_EVENT_TYPE
 +{
 +    MatCaptureFormatEventIsFormatSupported = 1,
-+    MatCaptureFormatEventNewStream = 2
++    MatCaptureFormatEventNewStream = 2,
++    MatCaptureFormatEventWritePacket = 3
 +} MAT_CAPTURE_FORMAT_EVENT_TYPE;
 +
 +typedef struct _MAT_CAPTURE_FORMAT_EVENT
@@ -1170,5 +1348,17 @@ index 0000000..c1fd725
 +    _In_ BOOLEAN Capture,
 +    _In_ NTSTATUS Status,
 +    _In_opt_ const KSDATAFORMAT* Format);
++
++_IRQL_requires_max_(DISPATCH_LEVEL)
++VOID MatCaptureRecordPacketEvent(
++    _In_ const VOID* Stream,
++    _In_ const WAVEFORMATEXTENSIBLE* Format,
++    _In_ ULONG PacketNumber,
++    _In_ ULONG LastPacketNumber,
++    _In_ KSSTATE State,
++    _In_ NTSTATUS Status,
++    _In_ ULONG DmaBufferSize,
++    _In_ ULONG NotificationCount,
++    _In_ ULONG NotificationIntervalMs);
 +
 +#endif
