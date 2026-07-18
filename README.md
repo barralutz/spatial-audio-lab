@@ -3,9 +3,10 @@
 Experimental Windows spatial-audio platform for capturing, decoding, rendering and routing
 immersive audio to configurable multi-device speaker layouts.
 
-SpatialAudioLab currently turns a virtual Windows spatial endpoint into an analog **7.1.4** output
-distributed across several WASAPI devices. It supports live game audio through Dolby MAT, DTS:X or
-native PCM, and real-time movie playback from E-AC-3 JOC and TrueHD Atmos sources.
+SpatialAudioLab turns a virtual Windows spatial endpoint into a configurable analog output
+distributed across one or more WASAPI devices. Profiles can describe standard layouts from 2.0
+through 7.1.4, including 5.1.2, 5.1.4 and 7.1.2. Live game audio can arrive through Dolby MAT,
+DTS:X or native PCM, while Cinema renders E-AC-3 JOC and TrueHD Atmos sources in real time.
 
 > [!WARNING]
 > This is research software, not a production audio driver or a finished installer. The current
@@ -19,7 +20,7 @@ native PCM, and real-time movie playback from E-AC-3 JOC and TrueHD Atmos source
 | --- | --- |
 | Dolby MAT game capture and render | Working live in 7.1.4 |
 | DTS:X game capture and render | Working live in 7.1.4 |
-| Native Windows Spatial PCM | Working live with a static 7.1.4 bed |
+| Native Windows Spatial PCM | Working live with layout-aware render/downmix |
 | E-AC-3 JOC movie playback | Working in real time through PCM 7.1.4 |
 | TrueHD Atmos movie playback | Working in real time through PCM 7.1.4 |
 | Multiple audio endpoints | Working with adaptive clock-drift correction |
@@ -28,9 +29,11 @@ native PCM, and real-time movie playback from E-AC-3 JOC and TrueHD Atmos source
 | Production-signed virtual driver | Not available |
 | General-purpose Windows spatial provider | Research stage |
 
-The validated layout uses a Realtek 7.1 endpoint plus two stereo endpoints for four height
-speakers. USB DACs, front-panel outputs and additional PCIe audio devices can be combined as long
-as Windows exposes them as independent render endpoints.
+The original validated layout uses a Realtek 7.1 endpoint plus two stereo endpoints for four
+height speakers. USB DACs, front-panel outputs and additional PCIe audio devices can be combined as
+long as Windows exposes them as independent render endpoints. Endpoint IDs, container identity,
+friendly names and channel capabilities are stored in each profile so hardware can be matched
+again without relying on the development machine's names.
 
 ## Components
 
@@ -111,9 +114,11 @@ Start the graphical layout and routing application:
 ```
 
 The included `configs/realtek-c1u-714.ini` describes the original development system and is an
-example, not a portable hardware preset. Copy it, select your own render endpoints in the
-**Outputs** tab, assign logical speakers to physical channels, test each speaker at low gain, and
-save the resulting profile before starting a live bridge.
+example and migration source, not a default profile. Studio stores versioned profiles below
+`%LocalAppData%\SpatialAudioLab\Profiles`, or below `Data\Profiles` when `portable.flag` exists next
+to the application. Select your own render endpoints in the **Outputs** tab, assign logical
+speakers to physical channels, test each speaker at low gain, and save the resulting profile before
+starting a live bridge.
 
 Studio can switch among four router modes:
 
@@ -142,10 +147,14 @@ height objects; Studio's channel meters show what the renderer is producing.
 
 ## Project status
 
-This repository records a working prototype and the investigation that produced it. Hardware names,
-endpoint IDs and private provider state are currently machine- and Windows-build-specific. The next
-major step is turning installation, endpoint discovery and profile creation into a reproducible setup
-flow that does not assume the original development PC.
+This repository records a working prototype and the investigation that produced it. Studio, Cinema
+and the Engine now resolve their files from an installed or portable application root; they no
+longer search for the repository, WSL media paths or the original `configs` and `captures`
+directories at runtime. Driver installation and spatial-provider switching are still
+Windows-build-sensitive and remain the next portability work.
+
+Developers can assemble and verify the source-tree portable layout without committing build
+artifacts by following the [portable runtime smoke test](docs/development/portable-runtime-smoke-test.md).
 
 The detailed captures, format analysis, validation results and recovery procedures live in
 [the technical notes](docs/TECHNICAL_NOTES.md). Contributions should preserve the separation between
