@@ -734,6 +734,10 @@ La ruta incremental ya esta integrada en SpatialAudioLab Cinema: Matroska entreg
 `EnhancedAC3Renderer`, Cavern actualiza JOC/OAMD cada 64 muestras y el PCM 7.1.4 alimenta una cola
 acotada. Pausa y busqueda reconstruyen todo el estado interframe con 300 ms de preroll. La utilidad
 y Cavern quedan sujetas a la licencia no comercial/share-alike incluida en `third_party/Cavern`.
+Las correcciones incrementales, el manejo seguro del ciclo de vida del renderer y la lectura de
+bloques Matroska con lacing se publican en el fork
+[`barralutz/Cavern`](https://github.com/barralutz/Cavern), rama `spatial-audio-lab`; el submodulo
+fija la revision exacta usada por el proyecto.
 
 ### Prueba de peliculas TrueHD Atmos
 
@@ -829,7 +833,8 @@ precargan 2.5 s y se reanuda.
 - [SysVAD, virtual audio device sample](https://learn.microsoft.com/en-us/samples/microsoft/windows-driver-samples/sysvad-virtual-audio-device-driver-sample/)
 - [Interpretacion CTA del SAD MAT](https://android.googlesource.com/platform/external/edid-decode/+/a004802a68f85992fb92bc0c93b2773d413d7f9e/parse-cta-block.cpp)
 - [Dolby MAT 2.0 para soundbars](https://professional.dolby.com/siteassets/tv/home/dolby-atmos/dolby-atmos-for-sound-bar-applications.pdf)
-- [Cavern](https://github.com/VoidXH/Cavern)
+- [Fork de Cavern usado por SpatialAudioLab](https://github.com/barralutz/Cavern/tree/spatial-audio-lab)
+- [Cavern upstream](https://github.com/VoidXH/Cavern)
 - [truehdd](https://github.com/truehdd/truehdd)
 - [dolby-atmos-encoder](https://github.com/raress96/dolby-atmos-encoder)
 - [Parche TrueHD de FFmpeg](https://ffmpeg.org/pipermail/ffmpeg-devel/2025-March/341429.html)

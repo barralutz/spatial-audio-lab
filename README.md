@@ -83,8 +83,10 @@ git clone --recurse-submodules https://github.com/barralutz/spatial-audio-lab.gi
 cd spatial-audio-lab
 ```
 
-Apply the versioned SpatialAudioLab overlays to SysVAD and Cavern, inspect and install the driver
-toolchain, then build the CLI and Studio:
+Apply the versioned SpatialAudioLab overlay to SysVAD, inspect and install the driver toolchain,
+then build the CLI and Studio. The Cavern submodule already points to the public SpatialAudioLab
+fork and contains the Cinema fixes; no separate Cavern patch step is required after a recursive
+clone:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
@@ -164,7 +166,9 @@ the kernel capture path and user-mode codec/render logic.
 
 SpatialAudioLab integrates or studies several projects as Git submodules, including Microsoft
 SysVAD, Cavern, FFmpeg, `truehdd` and `dolby-atmos-encoder`. Each dependency retains its own license
-and upstream history. The small source changes required by Virtual Sink and Cinema are kept as
-[versioned patches](patches/README.md), so all submodule gitlinks resolve to public upstream
-commits. Dolby, Dolby Atmos, DTS, DTS:X and Windows are trademarks of their respective owners;
-SpatialAudioLab is an independent experimental project.
+and upstream history. Virtual Sink changes are reproduced with a
+[versioned SysVAD patch](patches/README.md). Cinema uses the public
+[SpatialAudioLab Cavern fork](https://github.com/barralutz/Cavern), pinned to an exact commit from
+its `spatial-audio-lab` branch; the original [Cavern upstream](https://github.com/VoidXH/Cavern)
+remains linked for provenance. Dolby, Dolby Atmos, DTS, DTS:X and Windows are trademarks of their
+respective owners; SpatialAudioLab is an independent experimental project.
