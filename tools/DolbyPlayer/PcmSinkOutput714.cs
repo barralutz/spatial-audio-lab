@@ -51,10 +51,13 @@ internal sealed class PcmSinkOutput714 : IDisposable {
     MMDevice SelectDevice(string filter) {
         MMDevice[] matches = enumerator
             .EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active)
-            .Where(device => device.FriendlyName.Contains(filter, StringComparison.OrdinalIgnoreCase))
+            .Where(device =>
+                device.ID.Equals(filter, StringComparison.OrdinalIgnoreCase) ||
+                device.FriendlyName.Contains(filter, StringComparison.OrdinalIgnoreCase))
             .ToArray();
         if (matches.Length != 1) {
-            string found = string.Join(", ", matches.Select(device => device.FriendlyName));
+            string found = string.Join(", ", matches.Select(device =>
+                $"{device.FriendlyName} [{device.ID}]"));
             throw new InvalidOperationException(
                 $"Endpoint filter '{filter}' matched {matches.Length} devices: {found}");
         }

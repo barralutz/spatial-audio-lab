@@ -1,41 +1,101 @@
+using System.Text.Json;
+using SpatialAudioLab.Core.Profiles;
+using SpatialAudioLab.Core.Runtime;
+
 namespace DolbyPlayer;
 
-internal sealed class PlayerPaths {
-    public string RepoRoot { get; }
-    public string TrueHdStream { get; }
-    public string Mpv { get; }
-    public string Wsl { get; }
-    public string CacheRoot { get; }
+internal sealed class PlayerPaths
+{
+    private const string DefaultVirtualSinkName = "SpatialAudioLab Virtual Sink";
 
-    public PlayerPaths() {
-        DirectoryInfo? current = new(AppContext.BaseDirectory);
-        while (current != null && !File.Exists(Path.Combine(current.FullName, "README.md"))) {
-            current = current.Parent;
-        }
-        RepoRoot = current?.FullName ?? throw new DirectoryNotFoundException(
-            "Could not locate the SpatialAudioLab repository root.");
-        TrueHdStream = Path.Combine(RepoRoot, "tools", "truehdd", "truehd-stream.exe");
-        Mpv = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
-            "MPV Player", "mpv.exe");
-        Wsl = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),
-            "System32", "wsl.exe");
-        CacheRoot = Path.Combine(RepoRoot, "captures", "player-cache");
+    public PlayerPaths() : this(RuntimePaths.ResolveForCurrentProcess())
+    {
     }
 
-    public void Validate(bool requireMpv) {
-        if (!File.Exists(TrueHdStream)) throw new FileNotFoundException(
-            "The streaming TrueHD decoder is not built.", TrueHdStream);
-        if (!File.Exists(Wsl)) throw new FileNotFoundException("WSL is required for FFmpeg.", Wsl);
-        if (requireMpv && !File.Exists(Mpv)) throw new FileNotFoundException("mpv is not installed.", Mpv);
+    public PlayerPaths(RuntimePaths runtime)
+    {
+        Runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        Runtime.EnsureUserDirectories();
+        Ffprobe = Runtime.FfprobeExecutable;
+        Mpv = Runtime.MpvExecutable;
+        TrueHdStream = Runtime.TrueHdExecutable;
+        CacheRoot = Path.Combine(Runtime.CacheRoot, "Cinema");
+        ProductSettingsPath = Path.Combine(Runtime.DataRoot, "product-settings.json");
+        VirtualSinkFilter = LoadVirtualSinkFilter(ProductSettingsPath);
+    }
+
+    public RuntimePaths Runtime { get; }
+
+    public string Ffprobe { get; }
+
+    public string TrueHdStream { get; }
+
+    public string Mpv { get; }
+
+    public string CacheRoot { get; }
+
+    public string ProductSettingsPath { get; }
+
+    public string VirtualSinkFilter { get; }
+
+    public ProfileDocument RequireActiveProfile()
+    {
+        return new ProfileRepository(Runtime.ProfilesRoot).LoadActive() ??
+            throw new InvalidOperationException(
+                "No active speaker profile is configured. Complete the initial setup in SpatialAudioLab Studio.");
+    }
+
+    public string ResolveVirtualSinkFilter(string? diagnosticOverride)
+    {
+        return string.IsNullOrWhiteSpace(diagnosticOverride)
+            ? VirtualSinkFilter
+            : diagnosticOverride;
+    }
+
+    public void Validate(bool requireMpv)
+    {
+        if (!File.Exists(Ffprobe))
+        {
+            throw new FileNotFoundException("The bundled ffprobe executable is missing.", Ffprobe);
+        }
+
+        if (!File.Exists(TrueHdStream))
+        {
+            throw new FileNotFoundException(
+                "The bundled streaming TrueHD decoder is missing.",
+                TrueHdStream);
+        }
+
+        if (requireMpv && !File.Exists(Mpv))
+        {
+            throw new FileNotFoundException("The bundled mpv executable is missing.", Mpv);
+        }
+
         Directory.CreateDirectory(CacheRoot);
     }
 
-    public static string ToWslPath(string windowsPath) {
-        string fullPath = Path.GetFullPath(windowsPath);
-        if (fullPath.Length < 3 || fullPath[1] != ':' || fullPath[2] != '\\') {
-            throw new NotSupportedException($"Only local Windows paths can be passed to WSL: {fullPath}");
+    private static string LoadVirtualSinkFilter(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return DefaultVirtualSinkName;
         }
-        char drive = char.ToLowerInvariant(fullPath[0]);
-        return $"/mnt/{drive}/{fullPath[3..].Replace('\\', '/')}";
+
+        using FileStream stream = File.OpenRead(path);
+        using JsonDocument document = JsonDocument.Parse(stream);
+        JsonElement root = document.RootElement;
+        if (root.TryGetProperty("virtualSinkEndpointId", out JsonElement endpointId) &&
+            !string.IsNullOrWhiteSpace(endpointId.GetString()))
+        {
+            return endpointId.GetString()!;
+        }
+
+        if (root.TryGetProperty("virtualSinkFriendlyName", out JsonElement friendlyName) &&
+            !string.IsNullOrWhiteSpace(friendlyName.GetString()))
+        {
+            return friendlyName.GetString()!;
+        }
+
+        return DefaultVirtualSinkName;
     }
 }

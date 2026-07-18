@@ -18,14 +18,28 @@ internal sealed record MediaInfo(double DurationSeconds, IReadOnlyList<AudioStre
     }
 }
 
+internal sealed record MediaProbeCommand(
+    string Executable,
+    IReadOnlyList<string> Arguments);
+
 internal static class MediaProbe {
+    public static MediaProbeCommand CreateCommand(PlayerPaths paths, string input) {
+        ArgumentNullException.ThrowIfNull(paths);
+        ArgumentException.ThrowIfNullOrWhiteSpace(input);
+        return new MediaProbeCommand(paths.Ffprobe, new[] {
+            "-v", "error", "-show_entries",
+            "format=duration:stream=index,codec_name,profile,channels,sample_rate:stream_tags=language,title",
+            "-of", "json", input
+        });
+    }
+
     public static async Task<MediaInfo> ReadAsync(PlayerPaths paths, string input,
                                                   CancellationToken cancellationToken) {
-        string json = await ProcessRunner.CaptureAsync(paths.Wsl, new[] {
-            "--exec", "ffprobe", "-v", "error", "-show_entries",
-            "format=duration:stream=index,codec_name,profile,channels,sample_rate:stream_tags=language,title",
-            "-of", "json", PlayerPaths.ToWslPath(input)
-        }, cancellationToken);
+        MediaProbeCommand command = CreateCommand(paths, input);
+        string json = await ProcessRunner.CaptureAsync(
+            command.Executable,
+            command.Arguments,
+            cancellationToken);
         using JsonDocument document = JsonDocument.Parse(json);
         JsonElement root = document.RootElement;
         JsonElement format = root.GetProperty("format");

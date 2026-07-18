@@ -1,4 +1,5 @@
 using DolbyPlayer;
+using SpatialAudioLab.Core.Profiles;
 
 try {
     return await MainAsync(args);
@@ -29,11 +30,16 @@ static async Task<int> MainAsync(string[] args) {
     if (command == "self-test-audio") {
         double seconds = args.Length >= 3 ? ParseDouble(args[2]) : 10;
         float gain = args.Length >= 4 ? (float)ParseDouble(args[3]) : 1;
+        ProfileDocument selfTestProfile = paths.RequireActiveProfile();
         float[] pcm = AtmosChunkRenderer.Render(input, seconds);
         Pcm714Buffer queue = new();
         queue.Reset(0);
         queue.Append(pcm);
-        using PcmSinkOutput714 output = new(queue, "1 - HISENSE (Virtual Audio Device", gain);
+        using PcmSinkOutput714 output = new(
+            queue,
+            paths.ResolveVirtualSinkFilter(null),
+            gain);
+        Console.WriteLine($"Profile: {selfTestProfile.Name} ({selfTestProfile.LayoutId})");
         Console.WriteLine($"PCM 7.1.4 sink: {output.OutputName}");
         output.Play();
         double duration = pcm.Length / (double)(Pcm714Buffer.Channels * Pcm714Buffer.SampleRate);
@@ -72,13 +78,17 @@ static async Task<int> MainAsync(string[] args) {
     }
     if (command == "audio-test") {
         PlayerOptions testOptions = ParseOptions(args.Skip(2).ToArray());
+        ProfileDocument testProfile = paths.RequireActiveProfile();
         AudioStreamInfo testStream = media.Select(testOptions.AudioStreamIndex);
         Pcm714Buffer testQueue = new();
         await using IAtmosDecodePipeline testDecoder = testStream.Codec == AtmosCodec.Eac3Joc
             ? new Eac3JocDecodePipeline(input, testStream, media.DurationSeconds, testQueue)
             : new TrueHdStreamDecodePipeline(paths, input, testStream, media.DurationSeconds, testQueue);
         using PcmSinkOutput714 testOutput = new(
-            testQueue, testOptions.SinkFilter, testOptions.Gain);
+            testQueue,
+            paths.ResolveVirtualSinkFilter(testOptions.SinkFilter),
+            testOptions.Gain);
+        Console.WriteLine($"Profile: {testProfile.Name} ({testProfile.LayoutId})");
         double seconds = testOptions.StopAfterSeconds ?? 10;
         double stop = Math.Min(media.DurationSeconds, testOptions.StartSeconds + seconds);
         await testDecoder.RestartAsync(testOptions.StartSeconds, cancellation.Token);
@@ -148,8 +158,16 @@ static async Task<int> MainAsync(string[] args) {
     }
 
     PlayerOptions options = ParseOptions(args.Skip(2).ToArray());
+    ProfileDocument activeProfile = paths.RequireActiveProfile();
     AudioStreamInfo selected = media.Select(options.AudioStreamIndex);
-    await PlayerCoordinator.PlayAsync(paths, input, media, selected, options, cancellation.Token);
+    await PlayerCoordinator.PlayAsync(
+        paths,
+        input,
+        media,
+        selected,
+        activeProfile,
+        options,
+        cancellation.Token);
     return 0;
 }
 
@@ -157,7 +175,7 @@ static PlayerOptions ParseOptions(string[] args) {
     int? stream = null;
     double start = 0;
     float gain = 1;
-    string sink = "1 - HISENSE (Virtual Audio Device";
+    string? sink = null;
     double avDelay = 0;
     double? stopAfter = null;
     bool controlTest = false;

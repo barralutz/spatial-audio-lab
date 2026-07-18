@@ -13,5 +13,7 @@
   <ItemGroup>
     <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />
     <ProjectReference Include="..\..\third_party\Cavern\Cavern.Format\Cavern.Format.csproj" />
+    <ProjectReference Include="..\SpatialAudioLab.Core\SpatialAudioLab.Core.csproj" />
+    <InternalsVisibleTo Include="SpatialAudioLab.Cinema.Tests" />
   </ItemGroup>
 </Project>

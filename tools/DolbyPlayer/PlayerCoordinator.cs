@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using SpatialAudioLab.Core.Profiles;
 
 namespace DolbyPlayer;
 
@@ -6,17 +7,22 @@ internal static class PlayerCoordinator {
     const double PrebufferSeconds = 2.5;
 
     public static async Task PlayAsync(PlayerPaths paths, string input, MediaInfo media,
-                                       AudioStreamInfo stream, PlayerOptions options,
+                                       AudioStreamInfo stream, ProfileDocument activeProfile,
+                                       PlayerOptions options,
                                        CancellationToken cancellationToken) {
         Pcm714Buffer queue = new();
         await using IAtmosDecodePipeline decoder = stream.Codec == AtmosCodec.Eac3Joc
             ? new Eac3JocDecodePipeline(input, stream, media.DurationSeconds, queue)
             : new TrueHdStreamDecodePipeline(paths, input, stream, media.DurationSeconds, queue);
-        using PcmSinkOutput714 audio = new(queue, options.SinkFilter, options.Gain);
+        using PcmSinkOutput714 audio = new(
+            queue,
+            paths.ResolveVirtualSinkFilter(options.SinkFilter),
+            options.Gain);
         await using MpvController mpv = new(paths.Mpv, input, options.StartSeconds);
 
         Console.WriteLine($"Audio: 0:{stream.Index} {stream.Codec}, {stream.Channels}ch/{stream.SampleRate} Hz " +
                           $"{stream.Language} {stream.Title}".TrimEnd());
+        Console.WriteLine($"Profile: {activeProfile.Name} ({activeProfile.LayoutId})");
         Console.WriteLine($"PCM 7.1.4 sink: {audio.OutputName}");
         Console.WriteLine("Preparing Atmos prebuffer...");
 
@@ -154,6 +160,6 @@ internal static class PlayerCoordinator {
 }
 
 internal sealed record PlayerOptions(int? AudioStreamIndex, double StartSeconds, float Gain,
-                                     string SinkFilter,
+                                     string? SinkFilter,
                                      double AvDelayMilliseconds, double? StopAfterSeconds,
                                      bool ControlTest);
