@@ -1,6 +1,7 @@
 #include "audio_platform.h"
 #include "bridge_meter.h"
 #include "commands.h"
+#include "layout_mix.h"
 #include "mat_capture_client.h"
 #include "mat_format.h"
 #include "multi_endpoint_renderer.h"
@@ -361,6 +362,24 @@ std::wstring AudioObjectTypeName(const AudioObjectType type) {
     case AudioObjectType_TopBackLeft: return L"TBL";
     case AudioObjectType_TopBackRight: return L"TBR";
     default: return L"0x" + std::to_wstring(static_cast<std::uint32_t>(type));
+    }
+}
+
+std::optional<std::size_t> Canonical714Row(const AudioObjectType type) {
+    switch (type) {
+    case AudioObjectType_FrontLeft: return 0;
+    case AudioObjectType_FrontRight: return 1;
+    case AudioObjectType_FrontCenter: return 2;
+    case AudioObjectType_LowFrequency: return 3;
+    case AudioObjectType_BackLeft: return 4;
+    case AudioObjectType_BackRight: return 5;
+    case AudioObjectType_SideLeft: return 6;
+    case AudioObjectType_SideRight: return 7;
+    case AudioObjectType_TopFrontLeft: return 8;
+    case AudioObjectType_TopFrontRight: return 9;
+    case AudioObjectType_TopBackLeft: return 10;
+    case AudioObjectType_TopBackRight: return 11;
+    default: return std::nullopt;
     }
 }
 
@@ -836,7 +855,8 @@ struct DtsXSpatialDecodeStats {
 
 class DtsXSpatialDecoder {
 public:
-    explicit DtsXSpatialDecoder(const SpeakerLayout& layout) : layout_(layout) {
+    explicit DtsXSpatialDecoder(const SpeakerLayout& layout)
+        : layout_(layout), canonicalMix_(BuildCanonical714Mix(layout)) {
         decoder_ = ActivateAudioDecoder(
             L"DTSXDecoder", &kDtsXRawSubtype, &MFAudioFormat_Float_SpatialObjects);
         const Endpoint endpoint = SelectEndpoint(L"1 - HISENSE (Virtual Audio Device");
@@ -1019,7 +1039,7 @@ private:
                       "Get live DTS:X spatial object count");
         struct ObjectView {
             ComPtr<IMFSpatialAudioObjectBuffer> buffer;
-            std::optional<std::size_t> speaker;
+            const std::vector<double>* gains{};
             DWORD bytes{};
         };
         std::vector<ObjectView> objects;
@@ -1035,8 +1055,12 @@ private:
             view.buffer->GetType(&type);
             view.buffer->GetCurrentLength(&view.bytes);
             if (id != 0xffff'ffff && type != AudioObjectType_None) {
-                view.speaker = layout_.FindSpeaker(AudioObjectTypeName(type));
-                if (!view.speaker.has_value()) ++stats_.unmappedObjects;
+                const auto row = Canonical714Row(type);
+                if (row.has_value()) {
+                    view.gains = &canonicalMix_[*row];
+                } else {
+                    ++stats_.unmappedObjects;
+                }
             }
             if (view.bytes % sizeof(float) != 0) {
                 throw std::runtime_error("DTS:X object has an incomplete float sample");
@@ -1048,7 +1072,7 @@ private:
 
         std::vector<double> mixed(frameCount * layout_.speakers.size());
         for (ObjectView& object : objects) {
-            if (!object.speaker.has_value() || object.bytes == 0) continue;
+            if (object.gains == nullptr || object.bytes == 0) continue;
             BYTE* raw = nullptr;
             DWORD maximum = 0;
             DWORD current = 0;
@@ -1058,7 +1082,11 @@ private:
             const std::size_t valuesCount = current / sizeof(float);
             for (std::size_t frame = 0; frame < valuesCount; ++frame) {
                 const double value = std::isfinite(values[frame]) ? values[frame] : 0.0;
-                mixed[frame * layout_.speakers.size() + *object.speaker] += value;
+                for (std::size_t destination = 0;
+                     destination < layout_.speakers.size(); ++destination) {
+                    mixed[frame * layout_.speakers.size() + destination] +=
+                        value * (*object.gains)[destination];
+                }
             }
             object.buffer->Unlock();
         }
@@ -1074,6 +1102,7 @@ private:
     }
 
     const SpeakerLayout& layout_;
+    Canonical714Mix canonicalMix_;
     ActivatedDecoder decoder_;
     ComPtr<ISpatialAudioMetadataClient> metadataClient_;
     ComPtr<IMFMediaType> outputType_;

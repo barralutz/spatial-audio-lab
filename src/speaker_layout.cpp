@@ -142,15 +142,22 @@ SpeakerLayout LoadSpeakerLayout(const std::filesystem::path& path) {
         throw std::runtime_error("Speaker layout INI file was not found");
     }
 
+    const std::wstring versionText = ReadIniString(fullPath, L"profile", L"version");
+    const bool version2 = !versionText.empty();
+    if (version2 && versionText != L"2") {
+        throw std::runtime_error("Speaker layout uses an unsupported profile version");
+    }
+
     SpeakerLayout layout;
-    layout.name = ReadRequiredIniString(fullPath, L"layout", L"name");
+    layout.name = ReadRequiredIniString(
+        fullPath, version2 ? L"profile" : L"layout", L"name");
     const std::vector<std::wstring> speakerNames = SplitList(
         ReadRequiredIniString(fullPath, L"layout", L"speakers"));
     const std::vector<std::wstring> outputNames = SplitList(
         ReadRequiredIniString(fullPath, L"layout", L"outputs"));
     const std::wstring masterName = Lowercase(
         ReadRequiredIniString(fullPath, L"layout", L"master"));
-    if (speakerNames.size() < 2 || speakerNames.size() > 32 ||
+    if (speakerNames.size() < 2 || speakerNames.size() > 12 ||
         outputNames.empty() || outputNames.size() > 16) {
         throw std::runtime_error("Speaker layout has an unsupported number of speakers or outputs");
     }
@@ -182,7 +189,15 @@ SpeakerLayout LoadSpeakerLayout(const std::filesystem::path& path) {
         const std::wstring section = L"output." + outputName;
         OutputRouteDefinition output;
         output.name = outputName;
-        output.endpointFilter = ReadRequiredIniString(fullPath, section, L"endpoint");
+        if (version2) {
+            output.endpointFilter = ReadIniString(fullPath, section, L"endpoint_id");
+            if (output.endpointFilter.empty()) {
+                output.endpointFilter = ReadRequiredIniString(
+                    fullPath, section, L"endpoint_name");
+            }
+        } else {
+            output.endpointFilter = ReadRequiredIniString(fullPath, section, L"endpoint");
+        }
         output.delayMilliseconds = ReadIniDouble(fullPath, section, L"delay_ms", 0.0);
         if (output.delayMilliseconds < 0.0 || output.delayMilliseconds > 500.0) {
             throw std::runtime_error("Output delay must be between 0 and 500 milliseconds");
@@ -205,6 +220,17 @@ SpeakerLayout LoadSpeakerLayout(const std::filesystem::path& path) {
         if (output.speakerIndices.empty()) {
             throw std::runtime_error("An output route cannot be empty");
         }
+        if (version2) {
+            const double expectedChannels = ReadIniDouble(
+                fullPath, section, L"expected_channels");
+            if (expectedChannels < 1.0 || expectedChannels > 32.0 ||
+                std::floor(expectedChannels) != expectedChannels ||
+                output.speakerIndices.size() >
+                    static_cast<std::size_t>(expectedChannels)) {
+                throw std::runtime_error(
+                    "Output route exceeds its expected endpoint channel count");
+            }
+        }
         if (Lowercase(outputName) == masterName) {
             if (foundMaster) throw std::runtime_error("Speaker layout has multiple master outputs");
             layout.masterOutput = layout.outputs.size();
@@ -215,9 +241,6 @@ SpeakerLayout LoadSpeakerLayout(const std::filesystem::path& path) {
     if (!foundMaster) throw std::runtime_error("Speaker layout master does not name an output");
     if (std::find(assigned.begin(), assigned.end(), false) != assigned.end()) {
         throw std::runtime_error("Every speaker must be assigned to exactly one output route");
-    }
-    if (!layout.FindSpeaker(L"LFE").has_value()) {
-        throw std::runtime_error("A MAT speaker layout must contain an LFE speaker");
     }
     return layout;
 }

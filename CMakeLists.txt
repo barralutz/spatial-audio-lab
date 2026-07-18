@@ -2,12 +2,15 @@ cmake_minimum_required(VERSION 3.24)
 
 project(SpatialAudioLab LANGUAGES CXX)
 
+include(CTest)
+
 add_executable(SpatialAudioLab.CLI
   src/audio_platform.cpp
   src/bridge_meter.cpp
   src/capture_commands.cpp
   src/dolby_probe.cpp
   src/dtsx_analysis.cpp
+  src/layout_mix.cpp
   src/media_foundation_probe.cpp
   src/mat_analysis.cpp
   src/mat_capture_client.cpp
@@ -25,4 +28,23 @@ target_link_libraries(SpatialAudioLab.CLI PRIVATE ole32 runtimeobject windowsapp
 
 if(MSVC)
   target_compile_options(SpatialAudioLab.CLI PRIVATE /W4 /permissive- /EHsc)
+endif()
+
+if(BUILD_TESTING)
+  add_executable(SpatialAudioLab.NativeTests
+    tests/native/layout_mix_tests.cpp
+    src/audio_platform.cpp
+    src/layout_mix.cpp
+    src/speaker_layout.cpp
+  )
+  target_compile_features(SpatialAudioLab.NativeTests PRIVATE cxx_std_20)
+  target_compile_definitions(SpatialAudioLab.NativeTests PRIVATE
+    UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_include_directories(SpatialAudioLab.NativeTests PRIVATE src)
+  target_link_libraries(SpatialAudioLab.NativeTests PRIVATE
+    ole32 runtimeobject windowsapp uuid avrt propsys mmdevapi)
+  if(MSVC)
+    target_compile_options(SpatialAudioLab.NativeTests PRIVATE /W4 /permissive- /EHsc)
+  endif()
+  add_test(NAME SpatialAudioLab.NativeTests COMMAND SpatialAudioLab.NativeTests)
 endif()

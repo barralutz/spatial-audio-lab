@@ -2,6 +2,7 @@
 
 #include "audio_platform.h"
 #include "bridge_meter.h"
+#include "layout_mix.h"
 #include "mat_capture_client.h"
 #include "mat_format.h"
 #include "multi_endpoint_renderer.h"
@@ -148,20 +149,14 @@ public:
 
     explicit Mat712Decoder(const SpeakerLayout& layout)
         : layout_(&layout), outputChannels_(layout.speakers.size()) {
+        constexpr std::array<std::size_t, 11> canonicalRows = {
+            0, 1, 2, 6, 7, 4, 5, 8, 9, 10, 11};
+        const Canonical714Mix canonicalMix = BuildCanonical714Mix(layout);
         staticGains_.reserve(kMatStaticChannels.size());
-        for (const MatStaticChannel& channel : kMatStaticChannels) {
-            std::vector<double> gains(outputChannels_);
-            const auto exact = layout.FindSpeaker(channel.speakerName);
-            if (exact.has_value()) {
-                gains[*exact] = 1.0;
-            } else {
-                gains = PanDirection(layout, channel.azimuthDegrees, channel.height);
-            }
-            staticGains_.push_back(std::move(gains));
+        for (const std::size_t row : canonicalRows) {
+            staticGains_.push_back(canonicalMix[row]);
         }
-        const auto lfe = layout.FindSpeaker(L"LFE");
-        if (!lfe.has_value()) throw std::runtime_error("MAT layout does not contain LFE");
-        lfeOutputChannel_ = *lfe;
+        lfeGains_ = canonicalMix[3];
         InitializeIsfGains();
     }
 
@@ -246,9 +241,17 @@ public:
             const BYTE* lfeSource = logicalPayload.data() + lfeMarkers[half] +
                                     kMatLfeMarker.size();
             for (std::size_t frame = 0; frame < kMatOutputFramesPerHalf; ++frame) {
-                mixed[frame * outputChannels_ + lfeOutputChannel_] +=
-                    static_cast<double>(ReadMatPcm16(
-                        lfeSource + (frame / 4) * sizeof(std::int16_t), true)) / 32768.0;
+                const double sample = static_cast<double>(ReadMatPcm16(
+                    lfeSource + (frame / 4) * sizeof(std::int16_t), true)) / 32768.0;
+                if (layout_ == nullptr) {
+                    mixed[frame * outputChannels_ + 3] += sample;
+                } else {
+                    for (std::size_t outputChannel = 0;
+                         outputChannel < outputChannels_; ++outputChannel) {
+                        mixed[frame * outputChannels_ + outputChannel] +=
+                            sample * lfeGains_[outputChannel];
+                    }
+                }
             }
 
             if (isMat10) {
@@ -352,8 +355,8 @@ private:
 
     const SpeakerLayout* layout_{};
     std::size_t outputChannels_{kMatOutputChannels};
-    std::size_t lfeOutputChannel_{3};
     std::vector<std::vector<double>> staticGains_;
+    std::vector<double> lfeGains_;
     std::vector<std::vector<double>> isfGains_;
     Mat712DecodeStats stats_;
     std::size_t warmupBursts_{};

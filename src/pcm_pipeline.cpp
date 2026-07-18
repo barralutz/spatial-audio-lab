@@ -1,6 +1,7 @@
 #include "commands.h"
 
 #include "bridge_meter.h"
+#include "layout_mix.h"
 #include "mat_capture_client.h"
 #include "multi_endpoint_renderer.h"
 #include "speaker_layout.h"
@@ -16,32 +17,12 @@
 #include <iomanip>
 #include <iostream>
 #include <stdexcept>
-#include <string_view>
 #include <vector>
 
 namespace dolby {
 namespace {
 
 constexpr DWORD kPcm714ChannelMask = 0x0002D63F;
-constexpr std::array<std::wstring_view, 12> kPcm714Channels = {
-    L"FL", L"FR", L"FC", L"LFE", L"BL", L"BR",
-    L"SL", L"SR", L"TFL", L"TFR", L"TBL", L"TBR",
-};
-
-std::array<std::size_t, kPcm714Channels.size()> BuildChannelMap(
-    const SpeakerLayout& layout) {
-    std::array<std::size_t, kPcm714Channels.size()> result{};
-    for (std::size_t source = 0; source < kPcm714Channels.size(); ++source) {
-        const auto destination = layout.FindSpeaker(kPcm714Channels[source]);
-        if (!destination.has_value()) {
-            throw std::runtime_error(
-                "PCM 7.1.4 requires FL, FR, FC, LFE, BL, BR, SL, SR, TFL, TFR, TBL and TBR");
-        }
-        result[source] = *destination;
-    }
-    return result;
-}
-
 void ValidatePcm714Format(const MAT_CAPTURE_READ_HEADER& header) {
     if (header.Version < MAT_CAPTURE_PROTOCOL_VERSION) {
         throw std::runtime_error(
@@ -62,7 +43,7 @@ std::vector<std::int16_t> ConvertPcm714(
     const std::size_t byteCount,
     const MAT_CAPTURE_READ_HEADER& format,
     const SpeakerLayout& layout,
-    const std::array<std::size_t, kPcm714Channels.size()>& channelMap,
+    const Canonical714Mix& mix,
     std::vector<BYTE>& carry) {
     carry.insert(carry.end(), bytes, bytes + byteCount);
     const std::size_t frameBytes = format.BlockAlign;
@@ -72,7 +53,8 @@ std::vector<std::int16_t> ConvertPcm714(
     std::vector<std::int16_t> output(frames * layout.speakers.size());
     for (std::size_t frame = 0; frame < frames; ++frame) {
         const BYTE* sourceFrame = carry.data() + frame * frameBytes;
-        for (std::size_t source = 0; source < channelMap.size(); ++source) {
+        std::array<std::int16_t, 12> sourceSamples{};
+        for (std::size_t source = 0; source < sourceSamples.size(); ++source) {
             std::int16_t sample = 0;
             if (format.BitsPerSample == 16) {
                 std::memcpy(&sample, sourceFrame + source * sizeof(sample), sizeof(sample));
@@ -82,8 +64,14 @@ std::vector<std::int16_t> ConvertPcm714(
                             sizeof(wideSample));
                 sample = static_cast<std::int16_t>(wideSample >> 16);
             }
-            output[frame * layout.speakers.size() + channelMap[source]] = sample;
+            sourceSamples[source] = sample;
         }
+        MixCanonical714Frame(
+            sourceSamples,
+            mix,
+            std::span<std::int16_t>(
+                output.data() + frame * layout.speakers.size(),
+                layout.speakers.size()));
     }
 
     const std::size_t consumed = frames * frameBytes;
@@ -103,7 +91,7 @@ void PlayLivePcmLayout(const double seconds,
     }
 
     const SpeakerLayout layout = LoadSpeakerLayout(layoutPath);
-    const auto channelMap = BuildChannelMap(layout);
+    const Canonical714Mix mix = BuildCanonical714Mix(layout);
     WinHandle device = OpenMatCaptureDevice();
     ResetMatCapture(device.Get());
     BridgeMeterPublisher meters(layout, BridgeMeterMode::Pcm);
@@ -170,7 +158,7 @@ void PlayLivePcmLayout(const double seconds,
                     ringBytes += read.header.PayloadBytes;
                     lastPayloadTime = now;
                     auto pcm = ConvertPcm714(read.payload, read.header.PayloadBytes,
-                                             read.header, layout, channelMap, carry);
+                                             read.header, layout, mix, carry);
                     if (!pcm.empty()) {
                         pcmFrames += pcm.size() / layout.speakers.size();
                         meters.Update(pcm);
